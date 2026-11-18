@@ -1,0 +1,434 @@
+/**
+ * S3 Browser - Buckets Table JavaScript (Cleaned Up)
+ * Handles Browse and Details actions for the simplified buckets table
+ * All strings moved to PHP translations, all styles moved to CSS
+ */
+(function ($) {
+    'use strict';
+
+    // Extend the main S3Browser object with bucket methods
+    $.extend(window.S3Browser, {
+
+        /**
+         * Bind bucket-related event handlers
+         */
+        bindBucketEvents: function () {
+            var self = this;
+
+            // Browse bucket action (both button and row action)
+            $(document).off('click.s3browse').on('click.s3browse', '.browse-bucket-button, .bucket-name', function (e) {
+                e.preventDefault();
+                e.stopPropagation();
+                var $button = $(this);
+                var bucket = $button.data('bucket');
+                if (bucket) {
+                    self.browseBucket(bucket);
+                }
+            });
+
+            // Bucket details action
+            $(document).off('click.s3details').on('click.s3details', '.s3-bucket-details', function (e) {
+                e.preventDefault();
+                e.stopPropagation();
+                var $button = $(this);
+                var bucket = $button.data('bucket');
+                var provider = $button.data('provider');
+                if (bucket) {
+                    self.showBucketDetails(bucket, provider);
+                }
+            });
+        },
+
+        /**
+         * Browse bucket - navigate to bucket contents
+         */
+        browseBucket: function (bucket) {
+            this.navigateTo({
+                bucket: bucket,
+                prefix: ''
+            });
+        },
+
+        /**
+         * Show comprehensive bucket details modal
+         */
+        showBucketDetails: function (bucket, provider) {
+            var self = this;
+
+            this.showProgressOverlay(s3BrowserConfig.i18n.buckets.loadingDetails);
+
+            // Load bucket details including CORS info
+            this.makeAjaxRequest('bucketDetails', {
+                bucket: bucket,
+                provider: provider || S3BrowserGlobalConfig.providerId,
+                current_origin: window.location.origin // Explicitly pass origin
+            }, {
+                success: function (response) {
+                    self.hideProgressOverlay();
+                    self.displayBucketDetailsModal(bucket, response.data);
+                },
+                error: function (message) {
+                    self.hideProgressOverlay();
+                    self.showNotification(s3BrowserConfig.i18n.buckets.loadDetailsError.replace('{message}', message), 'error');
+                }
+            });
+        },
+
+        /**
+         * Display bucket details modal with fixed button logic
+         */
+        displayBucketDetailsModal: function (bucket, data) {
+            var self = this;
+
+            var hasCORS = data.cors && data.cors.analysis && data.cors.analysis.has_cors;
+            var uploadReady = data.cors && data.cors.upload_ready;
+
+            var content = this.buildBucketDetailsContent(bucket, data);
+
+            var buttons = [
+                {
+                    text: s3BrowserConfig.i18n.ui.close,
+                    action: 'close',
+                    classes: 'button-secondary',
+                    callback: function () {
+                        self.hideModal('s3BucketDetailsModal');
+                    }
+                }
+            ];
+
+            // Add revoke button if CORS exists
+            if (hasCORS) {
+                buttons.splice(-1, 0, {
+                    text: s3BrowserConfig.i18n.buckets.revokeCorsRules,
+                    action: 'revoke_cors',
+                    classes: 'button-secondary button-destructive',
+                    callback: function () {
+                        self.hideModal('s3BucketDetailsModal');
+                        setTimeout(function () {
+                            self.confirmRevokeCORS(bucket);
+                        }, 200);
+                    }
+                });
+            }
+
+            // Add setup button if not upload ready
+            if (!uploadReady) {
+                buttons.splice(-1, 0, {
+                    text: s3BrowserConfig.i18n.cors.corsSetup,
+                    action: 'setup_cors',
+                    classes: 'button-primary',
+                    callback: function () {
+                        self.hideModal('s3BucketDetailsModal');
+                        setTimeout(function () {
+                            if (window.S3Browser && typeof window.S3Browser.showCORSSetupModal === 'function') {
+                                window.S3Browser.showCORSSetupModal(bucket);
+                            } else {
+                                self.setupCORSDirectly(bucket);
+                            }
+                        }, 200);
+                    }
+                });
+            }
+
+            // Always add browse button at the beginning
+            buttons.unshift({
+                text: s3BrowserConfig.i18n.buckets.browseBucket,
+                action: 'browse',
+                classes: 'button-primary',
+                callback: function () {
+                    self.hideModal('s3BucketDetailsModal');
+                    self.browseBucket(bucket);
+                }
+            });
+
+            this.showModal('s3BucketDetailsModal', s3BrowserConfig.i18n.buckets.detailsTitle.replace('{bucket}', bucket), content, buttons);
+        },
+
+        /**
+         * Build bucket details content
+         */
+        /**
+         * Render the bucket details modal body.
+         *
+         * Markup lives in the `s3-bucket-details` Underscore template, printed
+         * by PHP. Underscore escapes `{{ }}` by default, so provider-supplied
+         * values — bucket names, CORS details, recommendations — cannot become
+         * markup by omission. Previously each of these was a separate manual
+         * escapeHtml() call, and getting one wrong was silent.
+         */
+        buildBucketDetailsContent: function (bucket, data) {
+            var render = wp.template('s3-bucket-details');
+
+            return render($.extend({}, data, {
+                bucket: bucket,
+                providerName: S3BrowserGlobalConfig.providerName || ''
+            }));
+        },
+
+        /**
+         * Direct CORS setup fallback method
+         */
+        setupCORSDirectly: function (bucket) {
+            var self = this;
+            var i18n = s3BrowserConfig.i18n.buckets;
+
+            var confirmMessage = i18n.corsSetupConfirm
+                .replace('{bucket}', bucket)
+                .replace('{origin}', window.location.origin);
+
+            if (!confirm(confirmMessage)) {
+                return;
+            }
+
+            // Show progress
+            this.showProgressOverlay(i18n.settingUpCors);
+
+            // Make the CORS setup request
+            this.makeAjaxRequest('setupCors', {
+                bucket: bucket,
+                origin: window.location.origin
+            }, {
+                success: function (response) {
+                    self.hideProgressOverlay();
+                    self.showNotification(
+                        response.data.message || i18n.corsSetupSuccess.replace('{bucket}', bucket),
+                        'success'
+                    );
+
+                    // Reload the page after a short delay to reflect changes
+                    setTimeout(function () {
+                        window.location.reload();
+                    }, 2000);
+                },
+                error: function (message) {
+                    self.hideProgressOverlay();
+                    self.showNotification(i18n.corsSetupError.replace('{message}', message), 'error');
+
+                    // Show manual setup instructions
+                    setTimeout(function () {
+                        self.showManualCORSInstructions(bucket, message);
+                    }, 1000);
+                }
+            });
+        },
+
+        /**
+         * The upload rule, in the shape one provider's console takes.
+         *
+         * There is one rule -- PUT from this site, two headers, an hour --
+         * and no one way to write it down. S3's console wants a list of
+         * rules; so does Cloudflare's, which refuses the ID that S3 allows;
+         * Backblaze and Google have key names of their own; DigitalOcean
+         * has a form and takes no JSON at all. Shown in the one S3 shape
+         * for everybody, it was pasted into Cloudflare and rejected.
+         *
+         * Everything else speaks the S3 API and mostly has no console
+         * for this, so it gets the document PutBucketCors takes.
+         *
+         * @param {string} type   Provider type, e.g. 'r2'.
+         * @param {string} origin This site's origin.
+         * @param {Object} where  Where-to-put-it sentences, by provider.
+         * @returns {{where: string, rule: string}}
+         */
+        corsRuleFor: function (type, origin, where) {
+            var headers = ['Content-Type', 'Content-Length'];
+            var json = function (value) {
+                return JSON.stringify(value, null, 2);
+            };
+            var own = Object.prototype.hasOwnProperty;
+            var sentence = function (key) {
+                return own.call(where, key) ? where[key] : (where['default'] || '');
+            };
+
+            switch (type) {
+                case 'aws':
+                    return {
+                        where: sentence('aws'),
+                        rule: json([{
+                            ID: 'UploadFromBrowser',
+                            AllowedOrigins: [origin],
+                            AllowedMethods: ['PUT'],
+                            AllowedHeaders: headers,
+                            ExposeHeaders: [],
+                            MaxAgeSeconds: 3600
+                        }])
+                    };
+
+                case 'r2':
+                    return {
+                        where: sentence('r2'),
+                        rule: json([{
+                            AllowedOrigins: [origin],
+                            AllowedMethods: ['PUT'],
+                            AllowedHeaders: headers,
+                            MaxAgeSeconds: 3600
+                        }])
+                    };
+
+                case 'backblaze':
+                    return {
+                        where: sentence('backblaze'),
+                        rule: json([{
+                            corsRuleName: 'uploadFromBrowser',
+                            allowedOrigins: [origin],
+                            allowedOperations: ['s3_put'],
+                            allowedHeaders: ['content-type', 'content-length'],
+                            exposeHeaders: [],
+                            maxAgeSeconds: 3600
+                        }])
+                    };
+
+                case 'gcs':
+                    return {
+                        where: sentence('gcs'),
+                        rule: json([{
+                            origin: [origin],
+                            method: ['PUT'],
+                            responseHeader: headers,
+                            maxAgeSeconds: 3600
+                        }])
+                    };
+
+                case 'digitalocean':
+                    return {
+                        where: sentence('digitalocean'),
+                        rule: [
+                            'Origin: ' + origin,
+                            'Allowed Methods: PUT',
+                            'Allowed Headers: ' + headers.join(', '),
+                            'Access Control Max Age: 3600'
+                        ].join('\n')
+                    };
+
+                default:
+                    return {
+                        where: sentence('default'),
+                        rule: json({
+                            CORSRules: [{
+                                ID: 'UploadFromBrowser',
+                                AllowedOrigins: [origin],
+                                AllowedMethods: ['PUT'],
+                                AllowedHeaders: headers,
+                                MaxAgeSeconds: 3600
+                            }]
+                        })
+                    };
+            }
+        },
+
+        /**
+         * Show manual CORS setup instructions, in the provider's own shape
+         */
+        showManualCORSInstructions: function (bucket, reason) {
+            var i18n = s3BrowserConfig.i18n.buckets;
+            var providerName = S3BrowserGlobalConfig.providerName || i18n.s3CompatibleProvider;
+            var cors = this.corsRuleFor(S3BrowserGlobalConfig.providerType, window.location.origin, {
+                aws: i18n.corsWhereAws,
+                r2: i18n.corsWhereR2,
+                backblaze: i18n.corsWhereBackblaze,
+                gcs: i18n.corsWhereGcs,
+                digitalocean: i18n.corsWhereDigitalocean,
+                'default': i18n.corsWhereDefault
+            });
+
+            var content = [
+                '<div class="s3-cors-setup-content">',
+                '<p><strong>' + i18n.autoSetupFailed + '</strong> ' + i18n.manualSetupInstruction.replace('{provider}', providerName) + '</p>',
+                reason ? '<p class="s3-cors-setup-reason"><code>' + window.S3Browser.escapeHtml(reason) + '</code></p>' : '',
+
+                '<div class="s3-cors-setup-details">',
+                '<h4>' + i18n.requiredCorsConfig + '</h4>',
+                '<p>' + window.S3Browser.escapeHtml(cors.where.replace('{bucket}', bucket)) + '</p>',
+                '<textarea readonly rows="10" class="s3-cors-config-textarea">' +
+                    window.S3Browser.escapeHtml(cors.rule) +
+                '</textarea>',
+                '</div>',
+
+                '<div class="s3-cors-setup-details">',
+                '<h4>' + i18n.whatRuleDoes + '</h4>',
+                '<ul class="s3-cors-rule-list">',
+                '<li><strong>' + i18n.putMethodOnly + '</strong> ' + i18n.putMethodDesc + '</li>',
+                '<li><strong>' + i18n.minimalHeaders + '</strong> ' + i18n.minimalHeadersDesc + '</li>',
+                '<li><strong>' + i18n.singleOrigin + '</strong> ' + i18n.singleOriginDesc + '</li>',
+                '<li><strong>' + i18n.oneHourCache + '</strong> ' + i18n.oneHourCacheDesc + '</li>',
+                '</ul>',
+                '</div>',
+
+                '<div class="s3-cors-setup-warning">',
+                '<p><strong>' + i18n.note + '</strong> ' + i18n.configOptimized + '</p>',
+                '</div>',
+                '</div>'
+            ].join('');
+
+            this.showModal('s3CORSManualSetupModal', i18n.manualCorsSetup, content, [
+                {
+                    text: s3BrowserConfig.i18n.ui.close,
+                    action: 'close',
+                    classes: 'button-secondary',
+                    callback: function () {
+                        window.S3Browser.hideModal('s3CORSManualSetupModal');
+                    }
+                },
+                {
+                    text: i18n.refreshPage,
+                    action: 'refresh',
+                    classes: 'button-primary',
+                    callback: function () {
+                        window.location.reload();
+                    }
+                }
+            ]);
+        },
+
+        /**
+         * Confirm CORS revocation with detailed warning
+         */
+        confirmRevokeCORS: function (bucket) {
+            var i18n = s3BrowserConfig.i18n.buckets;
+            var confirmMessage = i18n.revokeConfirm.replace('{bucket}', bucket);
+
+            if (confirm(confirmMessage)) {
+                this.revokeCORSRules(bucket);
+            }
+        },
+
+        /**
+         * Revoke CORS rules via AJAX
+         */
+        revokeCORSRules: function (bucket) {
+            var self = this;
+            var i18n = s3BrowserConfig.i18n.buckets;
+
+            this.showProgressOverlay(i18n.revokingCors);
+
+            this.makeAjaxRequest('deleteCors', {
+                bucket: bucket
+            }, {
+                success: function (response) {
+                    self.hideProgressOverlay();
+                    self.showNotification(i18n.revokeSuccess.replace('{bucket}', bucket), 'success');
+
+                    setTimeout(function () {
+                        window.location.reload();
+                    }, 2000);
+                },
+                error: function (message) {
+                    self.hideProgressOverlay();
+                    self.showNotification(i18n.revokeError.replace('{message}', message), 'error');
+                }
+            });
+        },
+
+        /**
+         * Escape HTML for safe display
+         */
+        escapeHtml: function (text) {
+            if (!text) return '';
+            var div = document.createElement('div');
+            div.textContent = text;
+            return div.innerHTML;
+        }
+
+    });
+
+})(jQuery);

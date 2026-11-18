@@ -1,0 +1,88 @@
+<?php
+/**
+ * Transport error translation.
+ *
+ * @package SugarCommerce\Storage
+ */
+
+declare( strict_types=1 );
+
+namespace SugarCommerce\Storage\Tests\S3;
+
+use SugarCommerce\Storage\S3\Transport;
+use PHPUnit\Framework\TestCase;
+
+/**
+ * Class TransportTest
+ */
+final class TransportTest extends TestCase {
+
+	/**
+	 * What a wrong Cloudflare account id actually produces.
+	 */
+	private const TLS = 'cURL error 35: LibreSSL/3.3.6: error:1404B410:SSL routines:ST_CONNECT:sslv3 alert handshake failure';
+
+	private const ENDPOINT = 'https://wrongaccountid.r2.cloudflarestorage.com';
+
+	public function test_a_failed_request_is_recognised(): void {
+		$this->assertTrue( Transport::is_transport_error( 'http_request_failed' ) );
+	}
+
+	/**
+	 * An S3 error means the endpoint answered, and its own wording is the
+	 * useful one -- so it must not be swept into a connectivity message.
+	 */
+	public function test_a_provider_error_is_left_alone(): void {
+		$this->assertFalse( Transport::is_transport_error( 'AccessDenied' ) );
+		$this->assertFalse( Transport::is_transport_error( 'NoSuchBucket' ) );
+	}
+
+	public function test_a_tls_failure_names_the_host_and_the_likely_cause(): void {
+		$message = Transport::explain( self::TLS, self::ENDPOINT );
+
+		$this->assertStringContainsString( 'wrongaccountid.r2.cloudflarestorage.com', $message );
+		$this->assertStringContainsString( 'Account ID', $message );
+		$this->assertStringNotContainsString( 'sslv3', $message );
+		$this->assertStringNotContainsString( 'cURL', $message );
+	}
+
+	public function test_an_unresolvable_host_says_so(): void {
+		$message = Transport::explain( 'cURL error 6: Could not resolve host: nope.example.com', self::ENDPOINT );
+
+		$this->assertStringContainsString( 'no server at', $message );
+		$this->assertStringNotContainsString( 'cURL', $message );
+	}
+
+	public function test_a_timeout_is_not_reported_as_a_typo(): void {
+		$message = Transport::explain( 'cURL error 28: Operation timed out after 30001 milliseconds', self::ENDPOINT );
+
+		$this->assertStringContainsString( 'did not respond', $message );
+		$this->assertStringNotContainsString( 'typo', $message );
+	}
+
+	public function test_an_unrecognised_failure_still_avoids_jargon(): void {
+		$message = Transport::explain( 'cURL error 52: Empty reply from server', self::ENDPOINT );
+
+		$this->assertStringContainsString( 'wrongaccountid.r2.cloudflarestorage.com', $message );
+		$this->assertStringNotContainsString( 'cURL', $message );
+	}
+
+	/**
+	 * The provider hands back a bare host, not a URL, and parse_url reads a
+	 * schemeless string as a path -- so the hostname went missing from the one
+	 * message that exists to name it.
+	 */
+	public function test_a_bare_host_is_still_named(): void {
+		$message = Transport::explain( self::TLS, 'wrongaccountid.r2.cloudflarestorage.com' );
+
+		$this->assertStringContainsString( 'wrongaccountid.r2.cloudflarestorage.com', $message );
+		$this->assertStringNotContainsString( 'the storage endpoint', $message );
+	}
+
+	public function test_without_an_endpoint_it_still_reads_as_a_sentence(): void {
+		$message = Transport::explain( self::TLS );
+
+		$this->assertStringContainsString( 'the storage endpoint', $message );
+		$this->assertStringNotContainsString( 'sslv3', $message );
+	}
+}

@@ -1,0 +1,135 @@
+<?php
+/**
+ * Filename tests.
+ *
+ * @package SugarCommerce\Storage
+ */
+
+declare( strict_types=1 );
+
+namespace SugarCommerce\Storage\Tests\Files;
+
+use PHPUnit\Framework\Attributes\DataProvider;
+use PHPUnit\Framework\TestCase;
+use SugarCommerce\Storage\Files\Filename;
+use SugarCommerce\Storage\Files\ZipDirectory;
+
+/**
+ * Class FilenameRefusalTest
+ */
+final class FilenameRefusalTest extends TestCase {
+
+	/**
+	 * @return array<string, array{string}>
+	 */
+	public static function refused(): array {
+		return array(
+			'a binary'             => array( 'setup.exe' ),
+			'upper case'           => array( 'SETUP.EXE' ),
+			'a double extension'   => array( 'invoice.pdf.exe' ),
+			'a page in our origin' => array( 'readme.html' ),
+			'an svg'               => array( 'logo.svg' ),
+			// 1.2.0: what Windows saves as setup.exe, and an NTFS stream of it.
+			'a trailing dot'       => array( 'setup.exe .' ),
+			'trailing dots, spaces' => array( 'setup.exe. . ' ),
+			'a space in a part'    => array( 'invoice.exe .pdf' ),
+			'a stream'             => array( 'setup.exe:payload' ),
+			'a zero-width split'   => array( "setup.ex\u{200B}e" ),
+			'an hta'               => array( 'update.hta' ),
+			'a php variant'        => array( 'shell.php7' ),
+			'an htaccess'          => array( '.htaccess' ),
+		);
+	}
+
+	#[DataProvider( 'refused' )]
+	public function test_a_name_that_would_run_is_refused( string $name ): void {
+		$this->assertNotSame( '', Filename::refusal( $name ) );
+	}
+
+	public function test_an_ordinary_name_is_accepted(): void {
+		$this->assertSame( '', Filename::refusal( 'Midnight Drive - Master.wav' ) );
+		$this->assertSame( '', Filename::refusal( 'stems.zip' ) );
+	}
+
+	/**
+	 * `photo\u{202E}gnp.pdf` displays as `photofdp.png`: a name that lies
+	 * about its type even when the real one is harmless.
+	 */
+	public function test_a_name_with_a_direction_override_is_refused(): void {
+		$this->assertNotSame( '', Filename::refusal( "photo\u{202E}gnp.pdf" ) );
+		$this->assertNotSame( '', Filename::refusal( "photo\u{2067}gnp.pdf" ), 'An isolate reorders too.' );
+	}
+
+	public function test_the_banned_list_is_matched_in_any_case(): void {
+		$this->assertNotSame( '', Filename::refusal( 'notes.txt', array( 'TXT' ) ) );
+	}
+
+	public function test_an_empty_name_is_refused(): void {
+		$this->assertNotSame( '', Filename::refusal( "  \x00 " ) );
+	}
+
+	/* ─── Renaming (1.1.0) ──────────────────────────────────────────── */
+
+	#[DataProvider( 'renames' )]
+	public function test_a_rename_keeps_the_extension( string $typed, string $expected ): void {
+		$this->assertSame( $expected, Filename::relabel( 'Midnight Drive - Master.wav', $typed ) );
+	}
+
+	/**
+	 * @return array<string, array{0: string, 1: string}>
+	 */
+	public static function renames(): array {
+		return array(
+			'plain'                     => array( 'Midnight Drive (Final)', 'Midnight Drive (Final).wav' ),
+			'typed with the extension'  => array( 'Final.wav', 'Final.wav' ),
+			'extension in another case' => array( 'Final.WAV', 'Final.wav' ),
+			'a different extension'     => array( 'Final.exe', 'Final.exe.wav' ),
+			'a path'                    => array( '../../etc/passwd', '-..-etc-passwd.wav' ),
+			'a windows path'            => array( 'C:\\Music\\Final', 'C--Music-Final.wav' ),
+			'characters windows refuses' => array( 'What? "Final" <mix>|*', 'What- -Final- -mix---.wav' ),
+			'an isolate'                => array( "Invoice\u{2067}vaw.exe", 'Invoicevaw.exe.wav' ),
+			'an arabic letter mark'     => array( "Fi\u{061C}nal", 'Final.wav' ),
+			'a reserved device'         => array( 'CON', 'CON_.wav' ),
+			'a reserved device, dotted' => array( 'nul.tar', 'nul_.tar.wav' ),
+			'not quite reserved'        => array( 'Console', 'Console.wav' ),
+			'bidi override'             => array( "evil\u{202E}vaw.exe", 'evilvaw.exe.wav' ),
+			'zero-width space'          => array( "Fi\u{200B}nal", 'Final.wav' ),
+			'control characters'        => array( "Fi\x00nal\r\n", 'Final.wav' ),
+			'runs of whitespace'        => array( "  Final \t  Mix  ", 'Final Mix.wav' ),
+			'a hidden file'             => array( '.Final', 'Final.wav' ),
+			'nothing but dots'          => array( '...', '' ),
+			'blank'                     => array( '   ', '' ),
+			'punctuation only'          => array( '— !', '' ),
+			'one letter'                => array( 'x', 'x.wav' ),
+			'another script'            => array( 'Музыка', 'Музыка.wav' ),
+		);
+	}
+
+	public function test_a_file_without_an_extension_stays_without_one(): void {
+		$this->assertSame( 'Read Me', Filename::relabel( 'README', 'Read Me' ) );
+	}
+
+	public function test_a_long_name_is_cut_before_the_extension(): void {
+		$name = Filename::relabel( 'a.flac', str_repeat( 'x', 400 ) );
+
+		$this->assertSame( 255, mb_strlen( $name ) );
+		$this->assertStringEndsWith( 'x.flac', $name );
+		$this->assertSame( 20, mb_strlen( Filename::relabel( 'a.flac', str_repeat( 'é', 400 ), 20 ) ), 'Characters, not bytes.' );
+	}
+
+	public function test_a_cut_does_not_leave_a_trailing_dot_or_space(): void {
+		$this->assertSame( 'ab.wav', Filename::relabel( 'a.wav', 'ab .cd', 7 ) );
+	}
+
+	public function test_the_list_is_the_callers(): void {
+		$this->assertSame( '', Filename::refusal( 'setup.exe', array() ) );
+		$this->assertNotSame( '', Filename::refusal( 'notes.txt', array( 'txt' ) ) );
+	}
+
+	public function test_the_zip_directory_is_read_from_a_fragment(): void {
+		$record = static fn( string $name ): string => "PK\x01\x02" . str_repeat( "\x00", 24 ) . pack( 'v', strlen( $name ) ) . str_repeat( "\x00", 16 ) . $name;
+
+		$this->assertSame( array( 'a.wav', 'b.wav' ), ZipDirectory::names( 'junk' . $record( 'a.wav' ) . $record( 'b.wav' ) ) );
+		$this->assertSame( array( 'a.wav' ), ZipDirectory::names( $record( 'a.wav' ) . $record( 'b.wav' ), limit: 1 ) );
+	}
+}

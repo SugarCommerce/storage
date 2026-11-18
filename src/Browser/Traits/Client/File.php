@@ -1,0 +1,591 @@
+<?php
+/**
+ * Client Object Operations Trait
+ *
+ * Handles object-related operations for the S3 Client.
+ *
+ * @package     SugarCommerce\Storage\Browser\Traits
+ * @copyright   Copyright (c) 2025, ArrayPress Limited
+ * @license     GPL2+
+ * @version     1.0.0
+ * @author      David Sherlock
+ */
+
+declare( strict_types=1 );
+
+namespace SugarCommerce\Storage\Browser\Traits\Client;
+
+use SugarCommerce\Storage\Browser\Interfaces\Response as ResponseInterface;
+use SugarCommerce\Storage\Browser\Responses\ErrorResponse;
+use SugarCommerce\Storage\Browser\Responses\SuccessResponse;
+use SugarCommerce\Storage\Browser\Utils\Directory;
+use SugarCommerce\Storage\Files\Mime;
+use Generator;
+use SugarCommerce\Storage\Browser\Xml\Response;
+
+/**
+ * Trait Objects
+ */
+trait File {
+
+	/**
+	 * Check if an object exists in a bucket
+	 *
+	 * @param string $bucket     Bucket name
+	 * @param string $object_key Object key
+	 * @param bool   $use_cache  Whether to use cache
+	 *
+	 * @return ResponseInterface Response with existence info
+	 */
+	public function object_exists( string $bucket, string $object_key, bool $use_cache = true ): ResponseInterface {
+		// Apply contextual filter to modify parameters
+		$params = $this->apply_contextual_filters(
+			's3_object_exists_params',
+			[
+				'bucket'     => $bucket,
+				'object_key' => $object_key,
+				'use_cache'  => $use_cache,
+			],
+			$bucket,
+			$object_key
+		);
+
+		$bucket     = $params['bucket'];
+		$object_key = $params['object_key'];
+		$use_cache  = $params['use_cache'];
+
+		if ( empty( $bucket ) || empty( $object_key ) ) {
+			return new ErrorResponse(
+				__( 'Bucket and object key are required', 'sugarcommerce' ),
+				'invalid_parameters',
+				400
+			);
+		}
+
+		// Check cache if enabled
+		if ( $use_cache && $this->cache->is_enabled() ) {
+			$cache_key = $this->cache->key( 'object_exists', [
+				'bucket' => $bucket,
+				'key'    => $object_key,
+			] );
+			$cached    = $this->cache->get( $cache_key );
+			if ( $cached !== false ) {
+				return $cached;
+			}
+		}
+
+		// Use HEAD request to check object existence
+		$head_result = $this->api->head_object( $bucket, $object_key );
+
+		if ( $head_result->is_successful() ) {
+			// Object exists - get metadata from the response
+			$metadata = $head_result->get_metadata();
+
+			$response = new SuccessResponse(
+				/* translators: %1$s: object key, %2$s: bucket name */
+				sprintf( __( 'Object "%1$s" exists in bucket "%2$s"', 'sugarcommerce' ), $object_key, $bucket ),
+				200,
+				[
+					'bucket'     => $bucket,
+					'object_key' => $object_key,
+					'exists'     => true,
+					'metadata'   => $metadata,
+					'method'     => 'head_object',
+				]
+			);
+
+			// Cache the positive result
+			if ( $use_cache && $this->cache->is_enabled() ) {
+				$this->cache->set( $cache_key, $response );
+			}
+
+			// Apply contextual filter to final response
+			return $this->apply_contextual_filters(
+				's3_object_exists_response',
+				$response,
+				$bucket,
+				$object_key
+			);
+		}
+
+		// Handle error response
+		if ( $head_result instanceof ErrorResponse ) {
+			$error_code    = $head_result->get_error_code();
+			$error_message = $head_result->get_error_message();
+			$status_code   = $head_result->get_status_code();
+
+			// Common error codes that indicate object doesn't exist
+			$not_found_codes = [ 'NoSuchKey', 'object_not_found', 'not_found', '404' ];
+
+			if ( $status_code === 404 ||
+				in_array( $error_code, $not_found_codes, true ) ||
+				strpos( $error_message, 'does not exist' ) !== false ||
+				strpos( $error_message, 'not found' ) !== false ||
+				strpos( $error_message, 'NoSuchKey' ) !== false ) {
+
+				$response = new SuccessResponse(
+					/* translators: %1$s: object key, %2$s: bucket name */
+					sprintf( __( 'Object "%1$s" does not exist in bucket "%2$s"', 'sugarcommerce' ), $object_key, $bucket ),
+					404,
+					[
+						'bucket'     => $bucket,
+						'object_key' => $object_key,
+						'exists'     => false,
+						'error_code' => $error_code,
+						'method'     => 'head_object',
+					]
+				);
+
+				// Cache the negative result
+				if ( $use_cache && $this->cache->is_enabled() ) {
+					$this->cache->set( $cache_key, $response );
+				}
+
+				// Apply contextual filter to final response
+				return $this->apply_contextual_filters(
+					's3_object_exists_response',
+					$response,
+					$bucket,
+					$object_key
+				);
+			}
+
+			// For other errors, we can't determine existence
+			return new ErrorResponse(
+				sprintf(
+					/* translators: %1$s: object key, %2$s: bucket name, %3$s: error message */
+					__( 'Unable to determine if object "%1$s" exists in bucket "%2$s": %3$s', 'sugarcommerce' ),
+					$object_key,
+					$bucket,
+					$error_message
+				),
+				'object_check_failed',
+				400,
+				[
+					'bucket'           => $bucket,
+					'object_key'       => $object_key,
+					'original_error'   => $error_code,
+					'original_message' => $error_message,
+				]
+			);
+		}
+
+		// Fallback - unable to determine
+		return new ErrorResponse(
+			/* translators: %1$s: object key, %2$s: bucket name */
+			sprintf( __( 'Unable to determine if object "%1$s" exists in bucket "%2$s"', 'sugarcommerce' ), $object_key, $bucket ),
+			'object_check_failed',
+			400,
+			[
+				'bucket'     => $bucket,
+				'object_key' => $object_key,
+			]
+		);
+	}
+
+	/**
+	 * Delete an object from a bucket
+	 *
+	 * @param string $bucket     Bucket name
+	 * @param string $object_key Object key
+	 *
+	 * @return ResponseInterface Response
+	 */
+	public function delete_object( string $bucket, string $object_key ): ResponseInterface {
+		// Apply contextual filter to modify parameters and allow preventing deletion
+		$delete_params = $this->apply_contextual_filters(
+			's3_delete_object_params',
+			[
+				'bucket'     => $bucket,
+				'object_key' => $object_key,
+				'proceed'    => true, // Allow preventing deletion
+			],
+			$bucket,
+			$object_key
+		);
+
+		// Check if deletion should proceed
+		if ( ! $delete_params['proceed'] ) {
+			return new ErrorResponse(
+				__( 'Object deletion was prevented by filter', 'sugarcommerce' ),
+				'deletion_prevented',
+				403,
+				[
+					'bucket'     => $bucket,
+					'object_key' => $object_key,
+				]
+			);
+		}
+
+		// Use potentially modified values
+		$bucket     = $delete_params['bucket'];
+		$object_key = $delete_params['object_key'];
+
+		// Use signer to delete object
+		$result = $this->api->delete_object( $bucket, $object_key );
+
+		// Debug logging if enabled
+		$this->debug( 'Client: Raw result from signer for delete operation:', $result );
+
+		// If we're caching, we need to bust the cache for this bucket/prefix
+		if ( $this->cache->is_enabled() ) {
+			// Extract the directory prefix from the object key
+			$prefix = Directory::prefix( $object_key );
+
+			// Clear cache for this specific prefix
+			$cache_key = $this->cache->key( 'objects_' . $bucket, [
+				'max_keys'  => 1000,
+				'prefix'    => $prefix,
+				'delimiter' => '/',
+			], $bucket );
+			$this->cache->forget( $cache_key );
+		}
+
+		// Apply contextual filter to final response
+		return $this->apply_contextual_filters(
+			's3_delete_object_response',
+			$result,
+			$bucket,
+			$object_key
+		);
+	}
+
+	/**
+	 * Copy an object within or between buckets
+	 *
+	 * @param string $source_bucket Source bucket name
+	 * @param string $source_key    Source object key
+	 * @param string $target_bucket Target bucket name
+	 * @param string $target_key    Target object key
+	 *
+	 * @return ResponseInterface Response
+	 */
+	public function copy_object( string $source_bucket, string $source_key, string $target_bucket, string $target_key ): ResponseInterface {
+		// Apply contextual filter to modify parameters
+		$params = $this->apply_contextual_filters(
+			's3_copy_object_params',
+			[
+				'source_bucket' => $source_bucket,
+				'source_key'    => $source_key,
+				'target_bucket' => $target_bucket,
+				'target_key'    => $target_key,
+			],
+			$source_bucket,
+			$target_bucket
+		);
+
+		// Use signer to copy an object
+		$result = $this->api->copy_object(
+			$params['source_bucket'],
+			$params['source_key'],
+			$params['target_bucket'],
+			$params['target_key']
+		);
+
+		// Debug logging if enabled
+		$this->debug( 'Client: Raw result from signer for copy operation:', $result );
+
+		// Clear cache for target bucket/prefix
+		if ( $this->cache->is_enabled() ) {
+			// Extract the directory prefix from the target object key
+			$prefix = Directory::prefix( $params['target_key'] );
+
+			// Clear cache for this specific prefix
+			$cache_key = $this->cache->key( 'objects_' . $params['target_bucket'], [
+				'max_keys'  => 1000,
+				'prefix'    => $prefix,
+				'delimiter' => '/',
+			], $params['target_bucket'] );
+			$this->cache->forget( $cache_key );
+		}
+
+		// Apply contextual filter to final response
+		return $this->apply_contextual_filters(
+			's3_copy_object_response',
+			$result,
+			$params['source_bucket'],
+			$params['target_bucket']
+		);
+	}
+
+	/**
+	 * Rename an object in a bucket
+	 *
+	 * @param string $bucket     Bucket name
+	 * @param string $source_key Current object key
+	 * @param string $target_key New object key
+	 *
+	 * @return ResponseInterface Response
+	 */
+	public function rename_object( string $bucket, string $source_key, string $target_key ): ResponseInterface {
+		// Apply contextual filter to modify parameters
+		$params = $this->apply_contextual_filters(
+			's3_rename_object_params',
+			[
+				'bucket'     => $bucket,
+				'source_key' => $source_key,
+				'target_key' => $target_key,
+			],
+			$bucket,
+			$source_key,
+			$target_key
+		);
+
+		$bucket     = $params['bucket'];
+		$source_key = $params['source_key'];
+		$target_key = $params['target_key'];
+
+		// 1. Copy the object to the new key
+		$copy_result = $this->copy_object( $bucket, $source_key, $bucket, $target_key );
+
+		// If copy failed, return the error
+		if ( ! $copy_result->is_successful() ) {
+			return new ErrorResponse(
+				__( 'Failed to copy object during rename operation', 'sugarcommerce' ),
+				'rename_error',
+				400,
+				[ 'copy_error' => $copy_result ]
+			);
+		}
+
+		// 2. Delete the original object
+		$delete_result = $this->delete_object( $bucket, $source_key );
+
+		// If delete failed, return a warning but still consider the operation successful
+		if ( ! $delete_result->is_successful() ) {
+			$response = new SuccessResponse(
+				__( 'Object renamed, but failed to delete the original', 'sugarcommerce' ),
+				207, // 207 Multi-Status
+				[
+					'warning'    => __( 'The object was copied but the original could not be deleted', 'sugarcommerce' ),
+					'source_key' => $source_key,
+					'target_key' => $target_key,
+				]
+			);
+		} else {
+			// Both operations succeeded
+			$response = new SuccessResponse(
+				__( 'Object renamed successfully', 'sugarcommerce' ),
+				200,
+				[
+					'source_key' => $source_key,
+					'target_key' => $target_key,
+				]
+			);
+		}
+
+		// Apply contextual filter to final response
+		return $this->apply_contextual_filters(
+			's3_rename_object_response',
+			$response,
+			$bucket,
+			$source_key,
+			$target_key
+		);
+	}
+
+	/**
+	 * Upload a file to a bucket
+	 *
+	 * @param string $bucket            Bucket name
+	 * @param string $target_key        Target object key
+	 * @param string $file_path         Local file path or file data
+	 * @param bool   $is_path           Whether $file_path is a path (true) or file contents (false)
+	 * @param string $content_type      Optional content type
+	 * @param array  $additional_params Optional additional parameters
+	 *
+	 * @return ResponseInterface Response
+	 */
+	public function put_object(
+		string $bucket,
+		string $target_key,
+		string $file_path,
+		bool $is_path = true,
+		string $content_type = '',
+		array $additional_params = []
+	): ResponseInterface {
+		// Apply contextual filter to modify upload parameters before processing
+		$upload_params = $this->apply_contextual_filters(
+			's3_put_object_params',
+			[
+				'bucket'            => $bucket,
+				'target_key'        => $target_key,
+				'file_path'         => $file_path,
+				'is_path'           => $is_path,
+				'content_type'      => $content_type,
+				'additional_params' => $additional_params,
+			],
+			$bucket,
+			$target_key
+		);
+
+		// Extract potentially modified values
+		$bucket            = $upload_params['bucket'];
+		$target_key        = $upload_params['target_key'];
+		$file_path         = $upload_params['file_path'];
+		$is_path           = $upload_params['is_path'];
+		$content_type      = $upload_params['content_type'];
+		$additional_params = $upload_params['additional_params'];
+
+		// A missing path used to fall through to file_get_contents(), which
+		// warns and returns false -- and the check below only catches that
+		// after a presigned URL has already been generated. The guard lived in
+		// upload_file(), a wrapper nothing called.
+		if ( $is_path && ! is_readable( $file_path ) ) {
+			return new ErrorResponse(
+				/* translators: %s: file path */
+				sprintf( __( 'File not found or unreadable: %s', 'sugarcommerce' ), $file_path ),
+				'file_not_found',
+				404,
+				[ 'file_path' => $file_path ]
+			);
+		}
+
+		// 1. Get a presigned upload URL
+		$upload_url_response = $this->get_presigned_upload_url( $bucket, $target_key, 15 );
+
+		if ( ! $upload_url_response->is_successful() ) {
+			return new ErrorResponse(
+				__( 'Failed to generate upload URL', 'sugarcommerce' ),
+				'upload_url_error',
+				400
+			);
+		}
+
+		// Get the presigned upload URL
+		$upload_url = $upload_url_response->get_url();
+
+		// 2. Determine the content type if not provided
+		if ( empty( $content_type ) ) {
+			if ( $is_path ) {
+				// If it's a file path, determine from the file
+				$content_type = mime_content_type( $file_path ) ?: 'application/octet-stream';
+			} else {
+				// If it's file data, determine from the target key
+				$content_type = Mime::of( $target_key );
+			}
+		}
+
+		// 3. Read the file contents
+		if ( $is_path ) {
+			$file_contents = file_get_contents( $file_path );
+			if ( $file_contents === false ) {
+				return new ErrorResponse(
+					__( 'Failed to read file', 'sugarcommerce' ),
+					'file_read_error',
+					400,
+					[ 'file_path' => $file_path ]
+				);
+			}
+		} else {
+			$file_contents = $file_path; // When not a path, this contains the actual content
+		}
+
+		$content_length = strlen( $file_contents );
+
+		// 4. Prepare headers - ALWAYS include Content-Length
+		$headers = array_merge( [
+			'Content-Type'   => $content_type,
+			'Content-Length' => (string) $content_length,
+		], $additional_params );
+
+		// 5. Upload the file using WordPress HTTP API
+		$response = wp_remote_request( $upload_url, [
+			'method'  => 'PUT',
+			'body'    => $file_contents,
+			'headers' => $headers,
+			'timeout' => 300,  // 5 minutes for large files
+		] );
+
+		// Handle upload errors
+		if ( is_wp_error( $response ) ) {
+			return new ErrorResponse(
+				$response->get_error_message(),
+				$response->get_error_code(),
+				400,
+				$response->get_error_data() ?: []
+			);
+		}
+
+		$status_code = wp_remote_retrieve_response_code( $response );
+
+		if ( $status_code < 200 || $status_code >= 300 ) {
+			// The provider says why -- AccessDenied, EntityTooLarge,
+			// NoSuchBucket. Replacing that with the status code alone leaves
+			// the caller guessing, and the whole $response was previously
+			// attached as error data, carrying headers into anything that
+			// serialised it.
+			return Response::error(
+				$status_code,
+				wp_remote_retrieve_body( $response ),
+				__( 'Upload failed.', 'sugarcommerce' )
+			);
+		}
+
+		// 6. Clear cache for this bucket/prefix
+		if ( $this->cache->is_enabled() ) {
+			// Extract the directory prefix from the object key
+			$prefix = Directory::prefix( $target_key );
+
+			// Clear cache for this specific prefix
+			$cache_key = $this->cache->key( 'objects_' . $bucket, [
+				'max_keys'  => 1000,
+				'prefix'    => $prefix,
+				'delimiter' => '/',
+			], $bucket );
+			$this->cache->forget( $cache_key );
+		}
+
+		// 7. Return success response
+		$success_response = new SuccessResponse(
+			__( 'File uploaded successfully', 'sugarcommerce' ),
+			$status_code,
+			[
+				'bucket' => $bucket,
+				'key'    => $target_key,
+				'size'   => $content_length,
+			]
+		);
+
+		// Apply contextual filter to final response
+		return $this->apply_contextual_filters(
+			's3_put_object_response',
+			$success_response,
+			$bucket,
+			$target_key,
+			$status_code
+		);
+	}
+
+	/**
+	 * Get object metadata without downloading content (HEAD request)
+	 *
+	 * @param string $bucket     Bucket name
+	 * @param string $object_key Object key
+	 *
+	 * @return ResponseInterface Response with object metadata
+	 */
+	public function head_object( string $bucket, string $object_key ): ResponseInterface {
+		if ( empty( $bucket ) || empty( $object_key ) ) {
+			return new ErrorResponse(
+				__( 'Bucket and object key are required', 'sugarcommerce' ),
+				'invalid_parameters',
+				400
+			);
+		}
+
+		// Use signer to perform HEAD request
+		$result = $this->api->head_object( $bucket, $object_key );
+
+		// Debug logging if enabled
+		$this->debug( 'Client: Raw result from signer for HEAD operation:', $result );
+
+		// Apply contextual filter to final response
+		return $this->apply_contextual_filters(
+			's3_head_object_response',
+			$result,
+			$bucket,
+			$object_key
+		);
+	}
+}
