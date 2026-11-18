@@ -148,7 +148,13 @@ class Buckets extends WP_List_Table {
 			if ( $timestamp ) {
 				$relative_time = sprintf(
 					'<br><small class="description">%s</small>',
-					esc_html( human_time_diff( $timestamp ) . ' ago' )
+					esc_html(
+						sprintf(
+							/* translators: %s: a span of time, such as "2 days". */
+							__( '%s ago', 'sugarcommerce' ),
+							human_time_diff( $timestamp )
+						)
+					)
 				);
 			}
 		}

@@ -178,7 +178,8 @@ class Test_WPDB {
 
 if ( ! function_exists( '__' ) ) {
 	function __( $text, $domain = 'default' ) {
-		return (string) $text;
+		// A test can hand in translations, by domain, to see a string is translated whole.
+		return (string) ( $GLOBALS['storage_test_translations'][ $domain ][ $text ] ?? $text );
 	}
 }
 
