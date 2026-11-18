@@ -133,4 +133,17 @@ final class MergedTest extends TestCase {
 		$this->assertSame( 'myplugin_vendor_sugarcommerce_storage', Runtime::prefix_for( 'MyPlugin_Vendor\\SugarCommerce\\Storage\\Utils' ) );
 		$this->assertSame( 'sugarcommerce-storage-browser', Runtime::handle( 'browser' ) );
 	}
+
+	/**
+	 * A plugin of the family prefixes with a namespace that also starts
+	 * "SugarCommerce", and its build is still its own.
+	 */
+	public function test_a_family_plugin_build_is_not_taken_for_the_library(): void {
+		$this->assertSame(
+			'sugarcommerce_playground_vendor_sugarcommerce_storage',
+			Runtime::prefix_for( 'SugarCommerce\\Playground\\Vendor\\SugarCommerce\\Storage\\Utils' )
+		);
+		$this->assertSame( 'sugarcart_sugarcommerce_storage', Runtime::prefix_for( 'SugarCart\\Vendor\\SugarCommerce\\Storage\\Utils' ), 'A plugin outside the family keeps its name.' );
+		$this->assertSame( 'sugarcommerce_storage', Runtime::prefix_for( '\\SugarCommerce\\Storage\\Utils\\' ) );
+	}
 }

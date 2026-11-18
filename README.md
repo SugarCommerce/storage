@@ -685,6 +685,10 @@ Every hook this package fires is named from its build, so two plugins bundling
 their own prefixed copies never steer each other. `Runtime::hook( 'name' )`
 gives the name: `sugarcommerce_storage_name` unprefixed, and
 `myplugin_sugarcommerce_storage_name` in a build Strauss prefixed `MyPlugin\`.
+A prefix that itself starts `SugarCommerce\` keeps all its segments --
+`SugarCommerce\Playground\Vendor\` gives
+`sugarcommerce_playground_vendor_sugarcommerce_storage_name` -- so a plugin of
+the family is never taken for an unprefixed copy.
 
 | Hook | Kind | What it does |
 |---|---|---|
