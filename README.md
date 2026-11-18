@@ -23,8 +23,7 @@ writing the attack twice. This does each of them once, properly, with no SDK.
 * Sign presigned download, inline, upload and multipart links for R2, S3, B2, Wasabi, DigitalOcean, MinIO and a dozen more providers
 * Send a file of any size to a bucket a part at a time, and resume a browser's multipart upload from what storage really kept
 * Read a byte range, the real stored size or an object's current ETag without downloading it
-* Take a bucket a customer brings, refuse any host that is not their provider's, and test the connection step by step
-* Keep and prune off-site copies of a backup in a bucket
+* List a bucket a page at a time, delete a thousand keys a request, copy in place, and read where it is
 * Read, write and explain a bucket's CORS rules, including whether a multipart upload will work
 * Browse buckets and folders in the admin, upload straight to storage, and attach a file to a field
 * Register an upload folder the server refuses, prove it over HTTP, and deliver from it with ranges and X-Sendfile
@@ -32,7 +31,7 @@ writing the attack twice. This does each of them once, properly, with no SDK.
 * Look up MIME types, decide inline or download, and file a type into a category
 * Rename a file without letting it change type, and refuse names that hide their real extension
 * Stream a ZIP to the browser without building it first
-* Inspect an upload's bytes, scan it with ClamAV or VirusTotal, and make resized image variants
+* Inspect an upload's bytes for executables, disguised types and zips hiding them
 * Cache-or-compute that can store `false`, delete by prefix on uninstall, and cast stored values back
 
 ## Installation
@@ -40,6 +39,12 @@ writing the attack twice. This does each of them once, properly, with no SDK.
 ```bash
 composer require sugarcommerce/storage
 ```
+
+It requires `sugarcommerce/plugin`: the browser's stylesheets, scripts and
+icons are found and given URLs by `SugarCommerce\Plugin\Assets`, wherever
+Composer or Strauss put this package, and `Files\Path::to_url()` maps
+anything outside uploads through it too. This package has no asset resolver
+of its own.
 
 ## Quick start
 
@@ -186,81 +191,29 @@ backwards range is refused before any request, and the answer is capped with
 `limit_response_size`, so a server that ignores the Range header cannot pull a
 six-gigabyte object into memory to answer a one-byte question.
 
-## Buckets your users bring
-
-`S3\Connection` is the value object for a bucket somebody else chose -- a
-seller's own R2, a customer's S3 -- checked once on the way in:
+### Listing and tidying
 
 ```php
-use SugarCommerce\Storage\S3\Connection;
+$page = $bucket->list( 'packs/' );                    // one level: objects and the folders under it
+$page = $bucket->list( 'packs/', '', $page['next_token'] ); // no delimiter: everything, a page at a time
 
-$connection = Connection::from_array( $_POST, [ 'r2', 'aws', 'backblaze' ] );
+// [ 'objects' => [ [ 'key', 'size', 'last_modified', 'etag', 'storage_class' ] ],
+//   'prefixes' => [ 'packs/drums/' ], 'truncated' => true, 'next_token' => '…' ]
 
-if ( is_string( $connection ) ) {
-	return $connection; // 'Paste your Cloudflare account id: …', translated
-}
+$done = $bucket->delete_many( $keys );                // [ 'deleted' => [...], 'errors' => [ [ 'key', 'code', 'message' ] ] ]
+$bucket->copy( 'packs/old.zip', 'packs/new.zip' );    // in place, type and metadata kept
+$bucket->region();                                    // 'eu-west-2'; S3's empty answer is 'us-east-1'
+$bucket->delete_cors();
 
-$stored = $sealer->seal( $connection->to_json() ); // it holds the secret
-$bucket = $connection->bucket();
-$shown  = $connection->masked();                   // all a page ever gets
+Bucket::all( $signer );                               // every bucket the key may list: [ [ 'name', 'created' ] ]
 ```
 
-There is no endpoint field for a user. Every request goes to the endpoint
-host, and a host somebody could type is one they control. The host is built
-from the provider, region and account id and must be the provider's own
-(`Provider::is_own_endpoint()`). The site's own MinIO, or a service named in
-wp-config.php, is allowed only when the caller says the input is the
-operator's: `Connection::from_array( $config, [ ...Connection::PROVIDERS, ...Connection::TYPED ], true )`.
-`var_dump()`, `print_r()` and `json_encode()` of a connection show the masked
-view; `to_json()` is the only way to the secret.
-
-### Testing a connection
-
-```php
-use SugarCommerce\Storage\S3\Cors\Origin;
-use SugarCommerce\Storage\S3\Probe;
-
-$steps = ( new Probe( 'my-plugin-connection-test/' ) )->run( $connection, [ Origin::current() ] );
-
-Probe::passed( $steps ); // bool
-
-foreach ( $steps as $step ) {
-	$step->check;  // ProbeCheck::Reach, Write, Read, Delete or Cors
-	$step->fault;  // null, or ProbeFault::Refused, Missing, Elsewhere, Altered, CorsOrigin, EtagHidden …
-	$step->detail; // the CORS reason, the origin refused, or (Unreachable) the reason, for a log
-}
-```
-
-It takes the site's own `Bucket` as well as a `Connection`. With a tiny object
-it does everything an upload later will: a HEAD (404 is the answer wanted), a
-PUT carrying the uploader's Origin, a presigned GET checked byte for byte, a
-DELETE, and the CORS question -- the stored policy when the keys may read it,
-otherwise a browser-style preflight per origin and whether the PUT's answer
-exposed ETag. Steps stop at the first failure, every answer is capped at
-64 KB, and faults are codes so you word them.
-
-## Off-site copies
-
-`S3\Backups` keeps copies of local files in the bucket: sent (sealed, if you
-give it the two hooks), listed, the newest few kept, and fetched back.
-
-```php
-use SugarCommerce\Storage\S3\Backups;
-
-$backups = new Backups( $bucket, $dir . '/remote.json', 'backups/', keep: 14,
-	seal: $sealer->seal_file( ... ), open: $sealer->open_file( ... ) );
-
-$key = $backups->send( $export );                     // 'backups/site-20261118.sql.sealed', or null
-$backups->prune();                                    // all but the newest 14
-$backups->fetch( $backups->keys()[0], $dir . '/restored.sql' );
-```
-
-What was sent is written to a JSON list beside the local copies once storage
-has it, so keys that cannot list the bucket can still prune it. A list that
-does not parse, or names a key outside the prefix, throws and is left alone --
-a fresh one would forget every copy already sent, and a list naming any key
-would have `prune()` delete it. A restore is written beside its target and
-moved into place whole, and never over a file unless you say so.
+`delete_many()` sends DeleteObjects a thousand keys at a time and reports key
+by key. A provider that does not implement it refuses the request whole --
+sometimes inside a 200 -- and that is a `WP_Error`, so a caller can fall back
+to `delete()`. A key scoped to one bucket cannot call ListBuckets, and the 403
+`Bucket::all()` gets is how a scoped key is told from a wrong one.
+`Account::signer( $access, $secret )` gives the signer for an `Account`.
 
 ## CORS
 
@@ -327,6 +280,25 @@ and `Account::custom( 'minio.internal:9000' )` cover the other providers. Two
 browsers on one site — two plugins, or two contexts — get separate media tabs,
 REST routes, script handles and caches.
 
+### The client
+
+`Browser\Client` is what the routes and list tables ask, cached per bucket
+and answered as an array or a `WP_Error` with storage's own code, its words
+and a status a REST response can relay. Every request goes through
+`S3\Bucket`; the browser has no S3 client of its own.
+
+```php
+$client = new SugarCommerce\Storage\Browser\Client( Account::r2( $account_id ), $access_key, $secret_key );
+
+$client->get_buckets();                           // [ 'buckets' => [ [ 'name', 'created' ] ], 'scoped' => bool ]
+$client->get_objects( 'my-bucket', 1000, 'packs/' ); // S3Object rows, folder prefixes, a continuation token
+$client->object_exists( 'my-bucket', $key );      // [ 'exists', 'size', 'mime_type' ]
+$client->rename_object( 'my-bucket', $from, $to );
+$client->delete_folder( 'my-bucket', 'packs/old' ); // every page of it, DeleteObjects or one key at a time
+$client->get_presigned_url( 'my-bucket', $key, 60 ); // minutes
+$client->get_bucket_options();                    // [ name => name ] for a select
+```
+
 ### Pages that are not post editors
 
 A post editor is recognised by its post type. A screen of your own — a
@@ -367,7 +339,8 @@ offers to set the rule. Setting it needs an admin token: a key with Object Read
 ### Icons
 
 Buckets, folders, file types and upload states are drawn as inline Heroicons
-(outline, MIT, in `assets/icons/heroicons`). Every icon carries the class
+(outline, MIT, in `assets/icons/heroicons`), read through
+`SugarCommerce\Plugin\Assets::contents()`. Every icon carries the class
 `arraypress-icon`, so one stylesheet rule sizes them all.
 
 ### WP-CLI
@@ -413,10 +386,6 @@ changing every browser on the site.
 | `s3_connection_test_fallback_bucket` | filter | A bucket the connection test may read instead |
 | `s3_object_references` | filter | Where an object is used, shown before it is renamed or deleted |
 | `s3_object_renamed` | action | After a rename or move (`$bucket, $old_key, $new_key`) |
-| `s3_{operation}_params`, `s3_{operation}_response` | filter, +context | Around every client operation: `get_buckets`, `get_bucket_models`, `get_bucket_count`, `bucket_exists`, `get_bucket_location`, `get_objects`, `get_object_models`, `object_exists`, `head_object` (response only), `put_object`, `copy_object`, `rename_object`, `delete_object`, `batch_delete_objects`, `delete_folder_batch`, `get_cors_configuration`, `set_cors_configuration`, `delete_cors_configuration`, `generate_cors_rules` (`_params`, `_result`) |
-| `s3_cors_analysis_result`, `s3_cors_upload_check_result` | filter, +context | A bucket's CORS reading |
-| `s3_create_folder_params`, `s3_folder_created`, `s3_folder_placeholder_content` | filter, +context | Making a folder |
-| `s3_delete_folder_params`, `s3_delete_folder_object`, `s3_folder_deleted` | filter, +context | Deleting one |
 
 ## Protected folders
 
@@ -456,8 +425,10 @@ Delivery sends ranges (so a download resumes and a video seeks), answers an
 unsatisfiable range with a 416 rather than the whole file, sends
 `X-Content-Type-Options: nosniff`, never renders HTML, SVG or script inline,
 and hands the file to the web server when it can: LiteSpeed always, Apache
-with mod_xsendfile, nginx once the `{prefix}_nginx_xsendfile` filter says the
-internal location is in place.
+when core's `apache_mod_loaded( 'mod_xsendfile' )` says so (never guessed
+under PHP-FPM, where Apache's modules cannot be seen), nginx -- Flywheel's
+too, which core's `$is_nginx` misses -- once the `{prefix}_nginx_xsendfile`
+filter says the internal location is in place.
 
 `Folders::is_protected( 'downloads' )` asks the site over HTTP and caches the
 answer for an hour. `Folders::server_rules( 'downloads' )` is the nginx text
@@ -531,8 +502,12 @@ take out direction overrides, which make `Invoice\u{202E}fdp.exe` display as
 against `Filename::EXECUTABLE` or a list you pass.
 
 `Path::from_url()` and `Path::to_url()` convert between uploads, content and
-site URLs and paths; `Path::is_local()` says whether a URL is a file on this
-site's disk.
+site URLs and paths -- `to_url()` hands anything outside uploads to
+`SugarCommerce\Plugin\Assets::path_to_url()` -- and `Path::is_local()` says
+whether a URL is a file on this site's disk. `Filename::basename()` is core's
+`wp_basename()`, which splits on either separator and keeps a multibyte name
+whole; `Filename::problem()` says what is wrong with a name typed for a
+rename.
 
 ## Streamed zips
 
@@ -655,121 +630,6 @@ fragment of an archive contains without parsing the archive. It is not a
 virus scanner, does not open nested archives, and a clean answer does not
 promise a file is safe.
 
-## Virus scanning
-
-Scanning looks like one call. Most of what goes wrong is around it: an outage
-read as a pass, a file nobody has seen before read as a failure, a digest
-the uploader made up, a scan that stopped at clamd's size limit and answered
-OK. So there are four answers -- `clean`, `infected`, `unknown` (nothing to
-say) and `error` (ask again) -- and an outage can never become a pass.
-
-```php
-use SugarCommerce\Storage\Scan\Clamd;
-use SugarCommerce\Storage\Scan\Panel;
-use SugarCommerce\Storage\Scan\Subject;
-use SugarCommerce\Storage\Scan\VirusTotal;
-
-// A size, a digest and a reader of inclusive byte ranges.
-$subject = new Subject(
-	$size,
-	'',
-	static function ( int $from, int $to ) use ( $bucket, $key ): string {
-		$bytes = $bucket->read( $key, $from, $to );
-
-		// A read that failed is an error, never a shorter file.
-		return is_wp_error( $bytes ) ? throw new RuntimeException( $bytes->get_error_message() ) : $bytes;
-	}
-);
-$subject = $subject->with_sha256( $subject->digest() );   // computed, never the uploader's claim
-
-$panel   = new Panel(
-	new Clamd( Clamd::address( 'localhost' ), limit: 100 * MB_IN_BYTES ),
-	new VirusTotal( $api_key )
-);
-$verdict = $panel->scan( $subject );
-
-match ( true ) {
-	$verdict->is_infected()           => quarantine( $verdict->detail ),   // "clamav: Eicar-Test-Signature"
-	$verdict->state->worth_retrying() => retry_later(),
-	Panel::unjudged( $verdict )       => hand_to_a_person( $verdict->detail ),
-	default                           => release(),   // clean, or nobody has seen it
-};
-```
-
-`Subject` reads 8 MiB at a time, so a two-gigabyte upload never sits in
-memory, and a read that comes back a different length -- a server that
-ignored `Range`, or stopped short -- is an exception, not a smaller file.
-`Subject::from_string()` and `Subject::from_stream()` cover a file already
-here.
-
-`Clamd` streams the bytes over clamd's `INSTREAM`, through a unix socket or
-TCP (`Clamd::address( $host, $socket )`). It refuses a file over the limit it
-is given rather than scanning part of it: give it the smallest of clamd's
-`StreamMaxLength`, `MaxFileSize` and `MaxScanSize`, or set
-`AlertExceedsMax yes`. An OK that arrives before the stream was finished is
-an error. `ping()` and `version()` are there for a health check.
-
-`VirusTotal` looks the digest up through the WordPress HTTP API and never
-sends the file, so it takes any size and knows nothing new. Two engines must
-agree before a file counts as malware, an analysis no engine could judge is
-unknown, and the key is kept out of stack traces and `var_dump()`.
-
-`Panel` asks every scanner that can take the file, cheapest first, and stops
-at the first infected answer. Infected from any one wins; an error from any
-one means ask again; one clean answer is clean; unknown from all of them is
-unknown with every reason. `Verdict::combine()` is the same rule for callers
-that ask their scanners themselves, and a scanner of your own implements
-`Scanner` (`name()`, `accepts()`, `scan()`) and never throws. The details are
-English notes for an operator's log rather than for an uploader.
-
-## Image variants
-
-Resized copies for `srcset`, as bytes: where they are kept -- uploads, a
-bucket, a table -- is the caller's decision.
-
-```php
-use SugarCommerce\Storage\Images\Fit;
-use SugarCommerce\Storage\Images\Generator;
-use SugarCommerce\Storage\Images\Size;
-
-$variants = ( new Generator() )->generate( $bytes, [
-	new Size( 'thumb', 300 ),
-	new Size( 'square', 400, 400, Fit::Cover ),
-] );
-
-foreach ( $variants as $name => $variant ) {
-	$bucket->put( 'media/' . $variant->filename( $slug ), $variant->bytes, $variant->format->mime() );
-}
-```
-
-WebP by default (`Format::Avif->can_encode()` before choosing AVIF). The
-format is read from the bytes, never from a name or a header the uploader
-chose, and SVG is refused -- it can carry `<script>`. Phone photographs are
-turned the right way up from their EXIF orientation (with ext-exif), and
-re-encoding drops the EXIF block and the GPS position in it. Transparency
-survives into WebP, AVIF and PNG and flattens to white, not black, in JPEG.
-Nothing is enlarged unless `upscale: true`, so check which sizes came back.
-
-`max_pixels` is checked from the header before anything is decoded, which is
-what stops a 12 KB PNG declaring 30,000 × 30,000 from taking gigabytes of
-memory; every variant is held to it too. Anything unusable throws an
-`InvalidArgumentException`. Needs ext-gd.
-
-An image the site does not own -- one a seller keeps at Stripe -- can be
-resized at the edge instead of copied:
-
-```php
-use SugarCommerce\Storage\Images\EdgeUrl;
-
-echo esc_url( EdgeUrl::cloudflare( 'shop.example.com', $image_url, 640 ) );
-// https://shop.example.com/cdn-cgi/image/width=640,quality=82,fit=cover,format=auto/https://…
-```
-
-It needs Cloudflare's Image Resizing on the zone. Anything it cannot improve
-comes back unchanged: no host, a source that is not `https://`, or one with
-whitespace, a backslash or a `..` segment a browser would resolve against
-the zone's own paths.
-
 ## Cache, cleanup and casts
 
 `get_transient()` returns `false` both when nothing is cached and when the
@@ -786,6 +646,8 @@ use SugarCommerce\Storage\Cleanup;
 $eligible = Cache::remember( 'myplugin_eligible_' . $user_id, fn() => check( $user_id ) );
 
 Cache::has( $key );    // true even when what is stored is false
+Cache::get( $key, 'none' ); // what is kept -- false included -- or the default
+Cache::set( $key, false );  // kept as false, not as nothing
 Cache::forget( $key );
 
 // On uninstall, take everything with you.
@@ -875,10 +737,13 @@ error rather than "no policy".
 
 Everything not listed keeps its name under `SugarCommerce\Storage\Browser`
 (`ArrayPress\S3\Client` is `SugarCommerce\Storage\Browser\Client`, and so on for
-`Api`, `Cache`, `Permissions`, `Admin\*`, `Rest\*`, `Tables\*`, `Cli\*`, `Xml\*`,
-`Responses\*`, `Models\*`, `Traits\*`, `Interfaces\*`, `Abstracts\*`,
+`Browser`, `Cache`, `Permissions`, `Admin\*`, `Rest\*`, `Tables\*`, `Cli\*`,
+`Models\S3Object`, `Traits\Shared\Context`, `Traits\Shared\Debug`,
 `Utils\Admin`, `Utils\Directory`, `Utils\Sanitize`, `Utils\Timestamp`,
-`Utils\Validate`).
+`Utils\Validate`). The browser's second S3 client is gone; see
+[Removed in the tidy-up](#removed-in-the-tidy-up). Its REST routes, their
+payloads, `window.S3BrowserHost`, the scripts and the option keys are
+unchanged.
 
 | Old | New |
 |---|---|
@@ -902,7 +767,7 @@ Everything not listed keeps its name under `SugarCommerce\Storage\Browser`
 | `Utils\Mime::is_allowed_extension( $name, $context )` | `Files\Mime::is_allowed( $name, $context )` |
 | `Admin\Icon::render()` / `file()` / `for_scripts()` | unchanged; always Heroicons, no wp-field-kit, no Dashicons fallback |
 | Breadcrumbs through `arraypress/wp-breadcrumbs` | drawn by `Admin\MediaLibrary`, same markup |
-| `arraypress_enqueue_composer_*()` (wp-composer-assets) | `SugarCommerce\Storage\Utils\Assets::enqueue_style()` / `enqueue_script()` / `url()` |
+| `arraypress_enqueue_composer_*()` (wp-composer-assets) | `SugarCommerce\Plugin\Assets::enqueue_style( $handle, __FILE__, $file )` / `enqueue_script()` / `url()` (sugarcommerce/plugin) |
 | filter `s3_browser_allowed_buckets` | `{prefix}_browser_allowed_buckets` |
 | filter `s3_browser_global_config` (+ `_{context}`) | `{prefix}_browser_global_config` (+ `_{context}`) |
 | filter `s3_browser_config` (+ `_{context}`) | `{prefix}_browser_config` (+ `_{context}`) |
@@ -931,7 +796,8 @@ in a build prefixed `MyPlugin\`); `{handle}` is the same with hyphens.
 | Old | New |
 |---|---|
 | `Path::within( $directory, $candidate )` | `Files\Path::within( $directory, $candidate )` |
-| `Path::is_absolute()`, `normalize()`, `from_url()`, `to_url()`, `is_local()` | `Files\Path::` the same |
+| `Path::is_absolute()`, `normalize()`, `from_url()`, `is_local()` | `Files\Path::` the same |
+| `Path::to_url()` | `Files\Path::to_url()` -- uploads from `wp_upload_dir()`, everything else through `SugarCommerce\Plugin\Assets::path_to_url()`: the WordPress root maps to `site_url()` rather than `home_url()`, a symlinked plugin maps back, and a folder that merely starts with the uploads folder's name is no longer taken for it |
 | `MIME::of()`, `extension_for()`, `must_download()`, `is_dangerous_inline()`, `is_media()`, `all()`, `extras()` | `Files\Mime::` the same (the class is `Mime`) |
 | `Filename::with_extension()` | `Files\Filename::with_extension()` |
 | `Filename::rename( $name, $original, $lower )` | `Files\Filename::rename()` — direction overrides are now removed too |
@@ -964,6 +830,51 @@ in a build prefixed `MyPlugin\`); `{handle}` is the same with hyphens.
 | transient `protected_folders_protected_{id}` | `sugarcommerce_storage_protected_{id}` (asked again once) |
 | `Rules::MARKER` (`# Protected Folders`) | unchanged, so `.htaccess` files the old library wrote are recognised and kept current |
 
+### Removed in the tidy-up
+
+Nothing in SugarCart, its Lemon Squeezy add-on, edd-registrars, the EDD
+plugins or the other SugarCommerce packages used these, by old or new name.
+
+| Removed | Instead |
+|---|---|
+| `Images\{Generator, Size, Fit, Format, Variant, Source, EdgeUrl}` | removed: unused. `wp_get_image_editor()` for resizing, which has an Imagick fallback and EXIF rotation |
+| `Scan\{Panel, Scanner, State, Subject, Verdict, Clamd, VirusTotal}` | removed: unused. `Files\Inspector` still checks what an upload is |
+| `S3\Backups` | removed: unused. `S3\Bucket::upload_file()`, `list()`, `delete()` and `download_file()` |
+| `S3\Connection` | removed: unused. `S3\Account` and `S3\Provider` for a bucket the site configures |
+| `S3\Probe`, `ProbeCheck`, `ProbeFault`, `ProbeStep` | removed: unused. `Browser\Permissions::check()` (read, write, delete) and `Browser\Client::cors_allows_upload()` |
+| `Utils\Assets` | `SugarCommerce\Plugin\Assets` (`enqueue_style( $handle, __FILE__, $file )`, `enqueue_script()`, `url()`, `contents()`, `path_to_url()`) |
+| `Browser\Api`, `Interfaces\Api`, `Traits\Api\*`, `Traits\Shared\Timeouts` | `S3\Bucket` through `Client::bucket( $name )`, and `Client::signer()` (was `Client::api()`) |
+| `Browser\Xml\{Parser, Builder, Extract, Response}` | `S3\Xml`, and Bucket's own readers |
+| `Browser\Responses\*`, `Interfaces\Response`, `Abstracts\Response` | every `Client` method returns an array (or `true`, or a string) or a `WP_Error` with storage's code, its words and a REST `status` |
+| `Models\S3Bucket` | `[ 'name', 'created' ]` from `Client::get_buckets()` / `S3\Bucket::all()` |
+| `Models\S3Prefix` | the prefix string; `Utils\Directory::name( $prefix )` for its name |
+| `Models\S3Object::get_dashicon_class()`, `to_array()` | removed: unused (`Admin\Icon::file()` draws the icon). It is now built from an `S3\Bucket::list()` row |
+| `Traits\Client\*` | `Browser\Client`, one class |
+| `Client::get_object_models()`, `get_objects()` | `Client::get_objects()`: `S3Object` rows (hidden files left out), prefix strings, `truncated`, `continuation_token` |
+| `Client::get_bucket_models()`, `get_buckets( $max, $prefix, $marker )` | `Client::get_buckets( $use_cache )`: every bucket, no marker paging |
+| `Client::put_object()`, `head_object()` | `Client::bucket( $name )->upload_file()` / `put()` / `head()` |
+| `Client::copy_object()` | `Client::rename_object()`, or `S3\Bucket::copy()` |
+| `Client::batch_delete_objects()`, `delete_folder_batch()`, `delete_folder( …, $recursive, $force )` | `Client::delete_folder( $bucket, $path )`: every page of keys, DeleteObjects, one key at a time where that is refused |
+| `Client::get_cors_configuration()` | `Client::get_cors_rules()` |
+| `Client::set_cors_configuration()`, `generate_cors_rules()` | `Client::set_cors_scenario()`, or `S3\Bucket::set_cors( S3\Cors\Rules::policy( … ) )` |
+| `Client::get_bucket_location()` (a response) | the same, a string or a `WP_Error` |
+| `Utils\Validate::filename()` | `Files\Filename::problem( $name )`: the reason, or `''` |
+| `Utils\Validate::cors_rules()` | `S3\Cors\Policy::from_array()`, which refuses a bad rule |
+| `Traits\Shared\Context::apply_contextual_filters()` and the hooks it fired: `s3_{operation}_params` / `_response` around every client call, `s3_cors_analysis_result`, `s3_cors_upload_check_result`, `s3_create_folder_params`, `s3_folder_created`, `s3_folder_placeholder_content`, `s3_delete_folder_params`, `s3_delete_folder_object`, `s3_folder_deleted` | removed: no consumer, and their values were the removed response objects |
+| `Account::format_url()`, `build_url_with_encoded_key()`, `build_url_with_query()` | the signer's: `Account::signer( $access, $secret )->sign( … )->url` |
+
+Behaviour that changed with it, all of it fixes: a copy refused inside a 200
+no longer counts as a rename (the original stays); a bucket's region is read
+(it always came back as the provider's default); a fallback bucket that does
+not exist no longer passes the connection test or appears in the bucket list;
+deleting a folder takes every page of keys, not the first thousand, in one
+DeleteObjects per thousand; `Debug` reports storage's refusals rather than
+raw requests; `Bucket::head()` puts the status in its error's data; and
+`StorageError` keeps storage's own words as `reason`. One a caller has to
+know: `new Client()` -- and so `new Browser()` -- throws an
+`InvalidArgumentException` for an empty access key or secret, where it used
+to build and then fail every request.
+
 ## From the retired SaaS packages
 
 | Old | New |
@@ -975,16 +886,10 @@ in a build prefixed `MyPlugin\`); `{handle}` is the same with hyphens.
 | `SugarCommerce\FileInspect\ZipDirectory` | `SugarCommerce\Storage\Files\ZipDirectory` |
 | `SugarCommerce\FileInspect\Filename::refusal()` / `EXECUTABLE` | `Files\Filename::refusal()` / `Filename::EXECUTABLE` |
 | `SugarCommerce\FileInspect\Filename::rename( $current, $typed, $max )` | `Files\Filename::relabel( $current, $typed, $max )` |
-| `SugarCommerce\VirusScan\{Scanner, State, Verdict, Subject, Clamd, Panel}` | `SugarCommerce\Storage\Scan\…`, same names |
-| `new VirusTotal( $key, $http, $engines, $timeout )` | `new Scan\VirusTotal( $key, $engines, $timeout )` -- on the WordPress HTTP API |
-| `SugarCommerce\ImageVariants\{Generator, Size, Fit, Format, Variant, Source, EdgeUrl}` | `SugarCommerce\Storage\Images\…`, same names |
+| `SugarCommerce\VirusScan\*`, `SugarCommerce\ImageVariants\*` | removed in the tidy-up: unused (see below) |
 
 Left out:
 
-* `sugarcommerce/http-client` as the transport for VirusTotal: retired
-  SaaS infrastructure, replaced by `wp_remote_get()` with a timeout, no
-  redirects and a 1 MB response cap. Its `Fake` in tests is the suite's
-  FakeHttp.
 * The zip-stream README's `$http->stream()` push example: it relied on
   http-client's connection pinning, which WordPress's HTTP API has no
   equivalent of. The WordPress way is above -- `stream` to a temporary file,
@@ -1004,7 +909,7 @@ Left out:
 
 * PHP 8.3 or later
 * WordPress 7.1 or later
-* `ext-gd` for image variants (`ext-exif` to turn phone photographs the right way up)
+* `sugarcommerce/plugin`, for asset URLs
 * Credentials for an S3-compatible provider, for anything in `S3\` or the browser
 
 ## License

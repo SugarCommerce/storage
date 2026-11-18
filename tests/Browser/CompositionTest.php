@@ -9,7 +9,6 @@ use SugarCommerce\Storage\Browser\Admin\MediaLibrary;
 use SugarCommerce\Storage\Browser\Admin\Screen;
 use SugarCommerce\Storage\Browser\Admin\Templates;
 use SugarCommerce\Storage\Browser\Admin\Translations;
-use SugarCommerce\Storage\Browser\Api;
 use SugarCommerce\Storage\Browser\Browser;
 use SugarCommerce\Storage\Browser\Cache;
 use SugarCommerce\Storage\Browser\Client;
@@ -46,7 +45,6 @@ final class CompositionTest extends TestCase {
 	 */
 	public static function composed_classes(): array {
 		$classes = [
-			Api::class,
 			Assets::class,
 			Browser::class,
 			Buckets::class,

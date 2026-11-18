@@ -60,12 +60,13 @@ final class Endpoint {
 	 * Under virtual-hosted addressing the bucket becomes a DNS label, so the
 	 * name is checked here — an incompatible one would otherwise be signed
 	 * into a hostname that cannot resolve, or whose wildcard certificate will
-	 * not match.
+	 * not match. No bucket at all is a request to the service itself --
+	 * ListBuckets -- which goes to the endpoint under either addressing.
 	 *
 	 * @since 1.0.0
 	 *
 	 * @param string          $endpoint   Normalised host.
-	 * @param string          $bucket     Bucket name.
+	 * @param string          $bucket     Bucket name, or '' for the service.
 	 * @param AddressingStyle $addressing Where the bucket goes.
 	 *
 	 * @return string
@@ -73,7 +74,7 @@ final class Endpoint {
 	 * @throws InvalidArgumentException When the bucket cannot be a DNS label.
 	 */
 	public static function host( string $endpoint, string $bucket, AddressingStyle $addressing ): string {
-		if ( AddressingStyle::Path === $addressing ) {
+		if ( AddressingStyle::Path === $addressing || '' === $bucket ) {
 			return $endpoint;
 		}
 

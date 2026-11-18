@@ -122,18 +122,18 @@ class Runner {
 					'key'    => $parsed['object'],
 				];
 
-				if ( ! $response->is_successful() ) {
+				if ( is_wp_error( $response ) ) {
 					// Credentials, network, a bucket that refuses to answer.
 					// Reported apart from "missing", because telling someone a
 					// file is gone when the truth is you could not look is
 					// worse than saying nothing.
-					$row['reason'] = $response->get_message();
+					$row['reason'] = $response->get_error_message();
 					$unreadable[]  = $row;
 
 					continue;
 				}
 
-				if ( true !== ( $response->get_data()['exists'] ?? false ) ) {
+				if ( true !== $response['exists'] ) {
 					$missing[] = $row;
 				}
 			}
@@ -259,16 +259,16 @@ class Runner {
 
 			$response = $this->client->object_exists( $parsed['bucket'], $parsed['object'], false );
 
-			if ( ! $response->is_successful() ) {
+			if ( is_wp_error( $response ) ) {
 				$problems[] = [
 					'path'   => $file['path'],
-					'reason' => $response->get_message(),
+					'reason' => $response->get_error_message(),
 				];
 
 				continue;
 			}
 
-			if ( true !== ( $response->get_data()['exists'] ?? false ) ) {
+			if ( true !== $response['exists'] ) {
 				$problems[] = [
 					'path'   => $file['path'],
 					'reason' => 'not found in bucket',

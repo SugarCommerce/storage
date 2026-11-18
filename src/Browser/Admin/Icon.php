@@ -12,7 +12,7 @@ declare( strict_types=1 );
 
 namespace SugarCommerce\Storage\Browser\Admin;
 
-use SugarCommerce\Storage\Utils\Assets;
+use SugarCommerce\Plugin\Assets;
 
 /**
  * Class Icon
@@ -134,10 +134,7 @@ final class Icon {
 	 */
 	private static function svg( string $file ): string {
 		if ( ! isset( self::$svg[ $file ] ) ) {
-			$path = Assets::file( 'icons/heroicons/' . $file . '.svg' );
-
-			// phpcs:ignore WordPress.WP.AlternativeFunctions.file_get_contents_file_get_contents -- one of the package's own icon files, read from disk.
-			self::$svg[ $file ] = null === $path ? '' : trim( (string) file_get_contents( $path ) );
+			self::$svg[ $file ] = trim( (string) Assets::contents( __FILE__, 'icons/heroicons/' . $file . '.svg' ) );
 		}
 
 		return self::$svg[ $file ];

@@ -59,9 +59,41 @@ final class Cache {
 
 		$value = $callback();
 
-		set_transient( $key, array( self::WRAPPER => $value ), max( 0, $ttl ) );
+		self::set( $key, $value, $ttl );
 
 		return $value;
+	}
+
+	/**
+	 * A kept value, or a default when there is none.
+	 *
+	 * @since 1.0.0
+	 *
+	 * @param string $key     Transient key.
+	 * @param mixed  $default What to return when nothing is kept.
+	 *
+	 * @return mixed A kept `false` is `false`, not the default.
+	 */
+	public static function get( string $key, mixed $default = null ): mixed {
+		$stored = get_transient( $key );
+
+		return is_array( $stored ) && array_key_exists( self::WRAPPER, $stored ) ? $stored[ self::WRAPPER ] : $default;
+	}
+
+	/**
+	 * Keep a value, whatever it is.
+	 *
+	 * @since 1.0.0
+	 *
+	 * @param string $key   Transient key.
+	 * @param mixed  $value The value; `false` and `null` are kept too.
+	 * @param int    $ttl   Seconds to keep it. 0 means until something
+	 *                      clears it.
+	 *
+	 * @return bool Whether it was kept.
+	 */
+	public static function set( string $key, mixed $value, int $ttl = HOUR_IN_SECONDS ): bool {
+		return (bool) set_transient( $key, array( self::WRAPPER => $value ), max( 0, $ttl ) );
 	}
 
 	/**

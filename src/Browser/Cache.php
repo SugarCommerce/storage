@@ -6,15 +6,15 @@
  * everything -- can be invalidated in one write.
  *
  * @package     SugarCommerce\Storage
- * @copyright   Copyright (c) 2025, ArrayPress Limited
- * @license     GPL2+
- * @author      David Sherlock
+ * @copyright   Copyright (c) 2026, ArrayPress Limited
+ * @license     GPL-2.0-or-later
  */
 
 declare( strict_types=1 );
 
 namespace SugarCommerce\Storage\Browser;
 
+use SugarCommerce\Storage\Cache as StorageCache;
 use SugarCommerce\Storage\Cleanup;
 
 /**
@@ -77,53 +77,31 @@ class Cache {
 	/**
 	 * Read an entry.
 	 *
-	 * @param string $key Cache key.
+	 * Through the package's Cache, whose wrapper tells a stored `false` from
+	 * a missing one. Only arrays and scalars are stored -- the client caches
+	 * storage's raw answers, never objects -- so an entry written by another
+	 * plugin's prefixed copy of this library reads back as plain data rather
+	 * than an instance of a class this build does not have.
 	 *
-	 * @return mixed|false Entry, or false when absent or caching is off.
+	 * @param string $key Key from key().
+	 *
+	 * @return mixed The value, or false when there is none or caching is off.
 	 */
 	public function get( string $key ) {
-		if ( ! $this->enabled ) {
-			return false;
-		}
-
-		$value = get_transient( $key );
-
-		// Two plugins can each ship their own Strauss-prefixed copy of this
-		// library and run side by side. Should they ever share a key, one copy
-		// reads back an object built from the other's classes -- which
-		// satisfies no type declaration here and takes the request down with a
-		// TypeError, from what looks like a plain cache hit. Prefixing keys per
-		// build (see Client) keeps them apart; this makes a collision degrade
-		// into a miss rather than a fatal.
-		if ( is_object( $value ) && ! self::is_own_class( $value ) ) {
-			return false;
-		}
-
-		return $value;
-	}
-
-	/**
-	 * Whether an object comes from this build of the library.
-	 *
-	 * @param object $value Cached object.
-	 *
-	 * @return bool
-	 */
-	private static function is_own_class( object $value ): bool {
-		return strtok( get_class( $value ), '\\' ) === strtok( __NAMESPACE__, '\\' );
+		return $this->enabled ? StorageCache::get( $key, false ) : false;
 	}
 
 	/**
 	 * Write an entry.
 	 *
-	 * @param string   $key   Cache key.
-	 * @param mixed    $value Value to store.
-	 * @param int|null $ttl   Lifetime override, in seconds.
+	 * @param string   $key   Key from key().
+	 * @param mixed    $value Value.
+	 * @param int|null $ttl   Lifetime in seconds; this cache's own by default.
 	 *
-	 * @return bool Whether it was stored.
+	 * @return bool Whether it was written.
 	 */
 	public function set( string $key, $value, ?int $ttl = null ): bool {
-		return $this->enabled && set_transient( $key, $value, $ttl ?? $this->ttl );
+		return $this->enabled && StorageCache::set( $key, $value, $ttl ?? $this->ttl );
 	}
 
 	/**
@@ -134,7 +112,7 @@ class Cache {
 	 * @return bool Whether it was removed.
 	 */
 	public function forget( string $key ): bool {
-		return delete_transient( $key );
+		return StorageCache::forget( $key );
 	}
 
 	/**

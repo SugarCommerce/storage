@@ -204,4 +204,19 @@ final class CacheTest extends TestCase {
 		$this->assertSame( 'from a', $a->get( $a->key( 'objects' ) ) );
 		$this->assertSame( 'from b', $b->get( $b->key( 'objects' ) ) );
 	}
+
+	/**
+	 * Off means off for reading too: what an enabled cache with the same
+	 * prefix wrote is not handed back.
+	 */
+	public function test_a_disabled_cache_reads_nothing_already_there(): void {
+		$on  = new Cache( true, 3600, 's3_same_' );
+		$off = new Cache( false, 3600, 's3_same_' );
+		$key = $on->key( 'objects' );
+
+		$on->set( $key, [ 'cached' ] );
+
+		$this->assertSame( [ 'cached' ], $on->get( $key ) );
+		$this->assertFalse( $off->get( $key ) );
+	}
 }

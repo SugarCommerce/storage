@@ -81,6 +81,9 @@ final class RegistryTest extends TestCase {
 			'nginx once told'             => [ 'nginx/1.27.0', true, true ],
 			'Flywheel is nginx'           => [ 'Flywheel/5.1.0', true, true ],
 			'Apache, modules unknown'     => [ 'Apache/2.4.62', true, false ],
+			'Apache with mod_xsendfile'   => [ 'Apache/2.4.62', false, true, [ 'core', 'mod_xsendfile' ] ],
+			'Apache without it'           => [ 'Apache/2.4.62', false, false, [ 'core', 'mod_rewrite' ] ],
+			'nginx is not Apache'         => [ 'nginx/1.27.0', false, false, [ 'mod_xsendfile' ] ],
 			'nothing said'                => [ '', true, false ],
 		];
 	}
@@ -92,10 +95,12 @@ final class RegistryTest extends TestCase {
 	 * @param string $software What the server calls itself.
 	 * @param bool   $told     Whether the nginx filter says yes.
 	 * @param bool   $expected Whether the server is handed the file.
+	 * @param array  $modules  The Apache modules PHP can see.
 	 */
 	#[DataProvider( 'servers' )]
-	public function test_the_server_is_handed_a_file_only_when_it_can_send_it( string $software, bool $told, bool $expected ): void {
-		$_SERVER['SERVER_SOFTWARE'] = $software;
+	public function test_the_server_is_handed_a_file_only_when_it_can_send_it( string $software, bool $told, bool $expected, array $modules = [] ): void {
+		$_SERVER['SERVER_SOFTWARE']        = $software;
+		$GLOBALS['wp_test_apache_modules'] = $modules;
 
 		if ( $told ) {
 			$GLOBALS['wp_test_filters'][ Runtime::hook( 'nginx_xsendfile' ) ] = static fn(): bool => true;

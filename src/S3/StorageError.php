@@ -54,6 +54,13 @@ final class StorageError extends RuntimeException {
 	public readonly string $error_code;
 
 	/**
+	 * Storage's own sentence for the refusal, or ''.
+	 *
+	 * @var string
+	 */
+	public readonly string $reason;
+
+	/**
 	 * Build one.
 	 *
 	 * @since 1.0.0
@@ -63,11 +70,14 @@ final class StorageError extends RuntimeException {
 	 * @param string $detail     Start of the response, for the log.
 	 * @param string $error_code Storage's own name for the refusal, e.g.
 	 *                           "SignatureDoesNotMatch", or '' when it gave none.
+	 * @param string $reason     Storage's own sentence for it, e.g. "Access
+	 *                           Denied", or ''.
 	 */
-	public function __construct( string $operation, int $status, string $detail = '', string $error_code = '' ) {
+	public function __construct( string $operation, int $status, string $detail = '', string $error_code = '', string $reason = '' ) {
 		$this->operation  = $operation;
 		$this->status     = $status;
 		$this->error_code = $error_code;
+		$this->reason     = $reason;
 
 		parent::__construct( sprintf( 'Storage %s failed (%d)%s', $operation, $status, '' === $detail ? '' : ': ' . substr( $detail, 0, 200 ) ) );
 	}
@@ -91,7 +101,7 @@ final class StorageError extends RuntimeException {
 		$message = 1 === preg_match( '#<Message>([^<]*)</Message>#', $body, $found ) ? $found[1] : '';
 		$detail  = '' !== $code ? trim( $code . ': ' . $message, ': ' ) : trim( strip_tags( $body ) );
 
-		return new self( $operation, $status, $detail, $code );
+		return new self( $operation, $status, $detail, $code, html_entity_decode( $message, ENT_QUOTES | ENT_XML1, 'UTF-8' ) );
 	}
 
 	/**
@@ -101,8 +111,8 @@ final class StorageError extends RuntimeException {
 	 *
 	 * @param string $code The WP_Error's code. Default `s3_{operation}_failed`.
 	 *
-	 * @return WP_Error With `status`, `operation` and `error_code` (storage's
-	 *                  own) in its data.
+	 * @return WP_Error With `status`, `operation`, `error_code` (storage's
+	 *                  own) and `reason` (storage's own words) in its data.
 	 */
 	public function to_wp_error( string $code = '' ): WP_Error {
 		return new WP_Error(
@@ -112,6 +122,7 @@ final class StorageError extends RuntimeException {
 				'status'     => $this->status,
 				'operation'  => $this->operation,
 				'error_code' => $this->error_code,
+				'reason'     => $this->reason,
 			)
 		);
 	}

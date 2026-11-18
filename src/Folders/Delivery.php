@@ -207,9 +207,9 @@ final class Delivery {
 	 * @return bool
 	 */
 	public static function server_sends_files(): bool {
-		$software = self::software();
-
-		if ( str_contains( $software, 'litespeed' ) ) {
+		// Before Apache: core counts LiteSpeed as Apache, but LiteSpeed
+		// sends files with no module to ask about.
+		if ( str_contains( self::software(), 'litespeed' ) ) {
 			return true;
 		}
 
@@ -225,15 +225,19 @@ final class Delivery {
 			return (bool) apply_filters( Runtime::hook( 'nginx_xsendfile' ), false );
 		}
 
-		if ( str_contains( $software, 'apache' ) && function_exists( 'apache_get_modules' ) ) {
-			return in_array( 'mod_xsendfile', (array) apache_get_modules(), true );
-		}
-
-		return false;
+		// Core's own check: false unless Apache says the module is loaded,
+		// either through apache_get_modules() or in phpinfo()'s module list.
+		// Under PHP-FPM neither shows Apache's modules, so it stays false
+		// there rather than guessing. It lives in wp-includes/functions.php,
+		// so it is there on the front end too, where downloads are served.
+		return apache_mod_loaded( 'mod_xsendfile' );
 	}
 
 	/**
 	 * Whether the web server is nginx, or a host that runs it as Flywheel does.
+	 *
+	 * Not core's `$is_nginx`: that is a case-sensitive look for "nginx" in
+	 * SERVER_SOFTWARE, and Flywheel's nginx calls itself "Flywheel/…".
 	 *
 	 * @return bool
 	 */

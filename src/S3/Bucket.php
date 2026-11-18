@@ -264,8 +264,10 @@ final class Bucket {
 			return $response;
 		}
 
+		// The status goes in the data: a 404 is "not there", which is an
+		// answer, and anything else is a refusal.
 		if ( ! Transport::is_success( $response['status'] ) ) {
-			return new WP_Error( $args['error_code'], sprintf( $args['messages']['head'], $response['status'] ) );
+			return new WP_Error( $args['error_code'], sprintf( $args['messages']['head'], $response['status'] ), array( 'status' => $response['status'] ) );
 		}
 
 		// Header names arrive in whatever case the provider sent them.
@@ -688,6 +690,129 @@ final class Bucket {
 		return self::refusal( 'read', $response );
 	}
 
+	/* ─── Listing ───────────────────────────────────────────────────── */
+
+	/**
+	 * Every bucket these credentials can list.
+	 *
+	 * Asks the service, not a bucket, so it is static: a key scoped to one
+	 * bucket is refused (403 AccessDenied) even though it works, and that
+	 * refusal is how a caller tells a scoped key from a wrong one.
+	 *
+	 * @since 1.0.0
+	 *
+	 * @param Signer $signer A signer for the provider.
+	 *
+	 * @return array<int, array{name: string, created: string}>|WP_Error
+	 *         `s3_buckets_failed` with storage's code in its data.
+	 */
+	public static function all( Signer $signer ): array|WP_Error {
+		$request  = $signer->sign( Method::GET, '' );
+		$response = Transport::send( $request, array( 'limit_response_size' => 1048576 ) );
+
+		if ( $response instanceof WP_Error ) {
+			return $response;
+		}
+
+		if ( ! Transport::is_success( $response['status'] ) ) {
+			return self::refusal( 'buckets', $response );
+		}
+
+		$document = Xml::load( $response['body'] );
+
+		if ( null === $document ) {
+			return self::refusal( 'buckets', $response );
+		}
+
+		$buckets = array();
+
+		foreach ( Xml::children( $document, 'Buckets' ) as $list ) {
+			foreach ( Xml::children( $list, 'Bucket' ) as $bucket ) {
+				$name = Xml::text( $bucket, 'Name' );
+
+				if ( '' !== $name ) {
+					$buckets[] = array(
+						'name'    => $name,
+						'created' => Xml::text( $bucket, 'CreationDate' ),
+					);
+				}
+			}
+		}
+
+		return $buckets;
+	}
+
+	/**
+	 * One page of what is in the bucket.
+	 *
+	 * ListObjectsV2. With a delimiter, keys below the next one are rolled up
+	 * into `prefixes` -- the folders -- so a listing is one level of the
+	 * tree; with none, everything under the prefix comes back, a page at a
+	 * time, which is what deleting a folder needs.
+	 *
+	 * @since 1.0.0
+	 *
+	 * @param string $prefix    Only keys starting with this.
+	 * @param string $delimiter Roll keys up at this character; '' for none.
+	 * @param string $token     The previous page's `next_token`, or ''.
+	 * @param int    $max_keys  Keys a page, 1 to 1000.
+	 *
+	 * @return array{objects: array<int, array{key: string, size: int, last_modified: string, etag: string, storage_class: string}>, prefixes: array<int, string>, truncated: bool, next_token: string}|WP_Error
+	 *         `s3_list_failed` with storage's code in its data.
+	 */
+	public function list( string $prefix = '', string $delimiter = '/', string $token = '', int $max_keys = 1000 ): array|WP_Error {
+		$request  = $this->signer->sign_list_objects( $this->name, $max_keys, $prefix, $delimiter, $token );
+		$response = Transport::send( $request, array( 'limit_response_size' => 8388608 ) );
+
+		if ( $response instanceof WP_Error ) {
+			return $response;
+		}
+
+		$document = Transport::is_success( $response['status'] ) ? Xml::load( $response['body'] ) : null;
+
+		if ( null === $document ) {
+			return self::refusal( 'list', $response );
+		}
+
+		$objects = array();
+
+		foreach ( Xml::children( $document, 'Contents' ) as $node ) {
+			$key = Xml::text( $node, 'Key' );
+
+			if ( '' === $key ) {
+				continue;
+			}
+
+			$class     = Xml::text( $node, 'StorageClass' );
+			$objects[] = array(
+				'key'           => $key,
+				'size'          => (int) Xml::text( $node, 'Size' ),
+				'last_modified' => Xml::text( $node, 'LastModified' ),
+				'etag'          => trim( Xml::text( $node, 'ETag' ), '"' ),
+				'storage_class' => '' === $class ? 'STANDARD' : $class,
+			);
+		}
+
+		$prefixes = array();
+
+		foreach ( Xml::children( $document, 'CommonPrefixes' ) as $node ) {
+			$folder = Xml::text( $node, 'Prefix' );
+
+			if ( '' !== $folder ) {
+				$prefixes[] = $folder;
+			}
+		}
+
+		$truncated = 'true' === strtolower( Xml::text( $document, 'IsTruncated' ) );
+
+		return array(
+			'objects'    => $objects,
+			'prefixes'   => $prefixes,
+			'truncated'  => $truncated,
+			'next_token' => $truncated ? Xml::text( $document, 'NextContinuationToken' ) : '',
+		);
+	}
+
 	/* ─── Links ─────────────────────────────────────────────────────── */
 
 	/**
@@ -798,6 +923,108 @@ final class Bucket {
 		return Transport::is_success( $response['status'] ) ? true : self::refusal( 'delete', $response );
 	}
 
+	/**
+	 * Copy an object to another key in this bucket, keeping its type and
+	 * metadata. Half of a rename; the other half is delete().
+	 *
+	 * @since 1.0.0
+	 *
+	 * @param string $from The key it has.
+	 * @param string $to   The key the copy gets.
+	 *
+	 * @return true|WP_Error A copy refused inside a 200 is refused.
+	 *
+	 * @throws InvalidArgumentException When either key has a "." or ".." segment.
+	 */
+	public function copy( string $from, string $to ): true|WP_Error {
+		if ( ! Validate::segments( $from ) ) {
+			throw new InvalidArgumentException( 'An S3 key cannot contain a "." or ".." path segment.' );
+		}
+
+		$request  = $this->signer->sign(
+			Method::PUT,
+			$this->name,
+			$to,
+			array(),
+			'',
+			// Signed, as every x-amz-* header must be: AWS refuses one added
+			// afterwards. Each segment encoded, the slashes kept.
+			array( 'x-amz-copy-source' => '/' . rawurlencode( $this->name ) . '/' . Endpoint::encode_key( $from ) )
+		);
+		$response = Transport::request( 'PUT', $request->url, $request->headers, '' );
+
+		return self::confirmed( $response ) ? true : self::refusal( 'copy', $response );
+	}
+
+	/**
+	 * Delete many objects, a thousand to a request.
+	 *
+	 * DeleteObjects answers 200 and lists, key by key, what it deleted and
+	 * what it would not. A provider that does not implement it at all --
+	 * some S3-compatible stores do not -- refuses the whole request, and
+	 * that comes back as a WP_Error so the caller can fall back to delete()
+	 * one key at a time.
+	 *
+	 * @since 1.0.0
+	 *
+	 * @param array<int, string> $keys Object keys.
+	 *
+	 * @return array{deleted: array<int, string>, errors: array<int, array{key: string, code: string, message: string}>}|WP_Error
+	 *         `s3_delete_many_failed` when a request was refused whole.
+	 */
+	public function delete_many( array $keys ): array|WP_Error {
+		$result = array(
+			'deleted' => array(),
+			'errors'  => array(),
+		);
+
+		foreach ( array_chunk( array_values( array_unique( array_map( 'strval', $keys ) ) ), 1000 ) as $chunk ) {
+			$body = '<?xml version="1.0" encoding="UTF-8"?>' . "\n" . '<Delete><Quiet>false</Quiet>';
+
+			foreach ( $chunk as $key ) {
+				$body .= '<Object><Key>' . htmlspecialchars( $key, ENT_XML1 | ENT_COMPAT, 'UTF-8' ) . '</Key></Object>';
+			}
+
+			$body    .= '</Delete>';
+			$request  = $this->signer->sign(
+				Method::POST,
+				$this->name,
+				'',
+				array( 'delete' => '' ),
+				$body,
+				array(
+					'content-type' => 'application/xml',
+					'content-md5'  => base64_encode( (string) hash( 'md5', $body, true ) ),
+				)
+			);
+			$response = Transport::send( $request, array( 'timeout' => 60 ) );
+
+			if ( $response instanceof WP_Error ) {
+				return $response;
+			}
+
+			$document = Transport::is_success( $response['status'] ) ? Xml::load( $response['body'] ) : null;
+
+			if ( null === $document || 'Error' === $document->getName() ) {
+				return self::refusal( 'delete_many', $response );
+			}
+
+			foreach ( Xml::children( $document, 'Deleted' ) as $node ) {
+				$result['deleted'][] = Xml::text( $node, 'Key' );
+			}
+
+			foreach ( Xml::children( $document, 'Error' ) as $node ) {
+				$result['errors'][] = array(
+					'key'     => Xml::text( $node, 'Key' ),
+					'code'    => Xml::text( $node, 'Code' ),
+					'message' => Xml::text( $node, 'Message' ),
+				);
+			}
+		}
+
+		return $result;
+	}
+
 	/* ─── The bucket itself ─────────────────────────────────────────── */
 
 	/**
@@ -808,7 +1035,8 @@ final class Bucket {
 	 *
 	 * @since 1.0.0
 	 *
-	 * @return array{ok: bool, error: string}
+	 * @return array{ok: bool, error: string, status?: int, code?: string, reason?: string}
+	 *         A refusal also carries its status and storage's code and words.
 	 */
 	public function reachable(): array {
 		$request  = $this->signer->sign_list_objects( $this->name, 1 );
@@ -819,10 +1047,7 @@ final class Bucket {
 				'ok'    => true,
 				'error' => '',
 			)
-			: array(
-				'ok'    => false,
-				'error' => self::describe( $response ),
-			);
+			: self::failed( $response );
 	}
 
 	/**
@@ -830,7 +1055,7 @@ final class Bucket {
 	 *
 	 * @since 1.0.0
 	 *
-	 * @return array{ok: bool, policy: Policy|null, error: string} A bucket
+	 * @return array{ok: bool, policy: Policy|null, error: string, status?: int, code?: string, reason?: string} A bucket
 	 *         with no configuration is ok, with an empty policy.
 	 */
 	public function cors(): array {
@@ -847,11 +1072,7 @@ final class Bucket {
 		}
 
 		if ( 200 !== $response['status'] ) {
-			return array(
-				'ok'     => false,
-				'policy' => null,
-				'error'  => self::describe( $response ),
-			);
+			return array( 'policy' => null ) + self::failed( $response );
 		}
 
 		try {
@@ -880,7 +1101,8 @@ final class Bucket {
 	 *
 	 * @param Policy $policy The policy to store.
 	 *
-	 * @return array{ok: bool, error: string}
+	 * @return array{ok: bool, error: string, status?: int, code?: string, reason?: string}
+	 *         A refusal also carries its status and storage's code and words.
 	 */
 	public function set_cors( Policy $policy ): array {
 		$request  = $this->signer->sign_put_bucket_cors( $this->name, $policy );
@@ -891,10 +1113,56 @@ final class Bucket {
 				'ok'    => true,
 				'error' => '',
 			)
-			: array(
-				'ok'    => false,
-				'error' => self::describe( $response ),
-			);
+			: self::failed( $response );
+	}
+
+	/**
+	 * Remove the bucket's CORS policy altogether.
+	 *
+	 * @since 1.0.0
+	 *
+	 * @return array{ok: bool, error: string, status?: int, code?: string, reason?: string}
+	 *         A refusal also carries its status and storage's code and words.
+	 */
+	public function delete_cors(): array {
+		$request  = $this->signer->sign_delete_bucket_cors( $this->name );
+		$response = Transport::request( 'DELETE', $request->url, $request->headers );
+
+		return Transport::is_success( $response['status'] )
+			? array(
+				'ok'    => true,
+				'error' => '',
+			)
+			: self::failed( $response );
+	}
+
+	/**
+	 * Where the bucket is, as the provider names it.
+	 *
+	 * GetBucketLocation. S3 answers an empty LocationConstraint for
+	 * us-east-1 rather than naming it, so an empty one is that region.
+	 *
+	 * @since 1.0.0
+	 *
+	 * @return string|WP_Error `s3_location_failed` with storage's code in its data.
+	 */
+	public function region(): string|WP_Error {
+		$request  = $this->signer->sign( Method::GET, $this->name, '', array( 'location' => '' ) );
+		$response = Transport::send( $request, array( 'limit_response_size' => 65536 ) );
+
+		if ( $response instanceof WP_Error ) {
+			return $response;
+		}
+
+		$document = Transport::is_success( $response['status'] ) ? Xml::load( $response['body'] ) : null;
+
+		if ( null === $document ) {
+			return self::refusal( 'location', $response );
+		}
+
+		$region = trim( (string) $document );
+
+		return '' === $region ? 'us-east-1' : $region;
 	}
 
 	/* ─── Internals ─────────────────────────────────────────────────── */
@@ -1043,6 +1311,26 @@ final class Bucket {
 		$body = '' !== ( $response['body'] ?? '' ) ? (string) $response['body'] : (string) ( $response['error'] ?? '' );
 
 		return StorageError::refused( $operation, (int) $response['status'], $body )->to_wp_error();
+	}
+
+	/**
+	 * A refusal, for the calls that answer with `ok` rather than a WP_Error:
+	 * the line, the status, and storage's own code and words for it.
+	 *
+	 * @param array $response What Transport::request() returned.
+	 *
+	 * @return array{ok: false, error: string, status: int, code: string, reason: string}
+	 */
+	private static function failed( array $response ): array {
+		$refusal = StorageError::refused( 'request', (int) $response['status'], '' !== $response['body'] ? $response['body'] : $response['error'] );
+
+		return array(
+			'ok'     => false,
+			'error'  => self::describe( $response ),
+			'status' => $refusal->status,
+			'code'   => $refusal->error_code,
+			'reason' => $refusal->reason,
+		);
 	}
 
 	/**

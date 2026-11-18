@@ -12,6 +12,8 @@ declare( strict_types=1 );
 
 namespace SugarCommerce\Storage\S3\Cors;
 
+use SugarCommerce\Storage\S3\Xml;
+
 /**
  * Class Policy
  *
@@ -137,28 +139,23 @@ final readonly class Policy implements \Countable, \IteratorAggregate {
 			return new self();
 		}
 
-		// LIBXML_NONET: the document is a provider's answer, and nothing in it
-		// gets to make this process fetch anything else.
-		$previous = libxml_use_internal_errors( true );
-		$document = simplexml_load_string( $xml, \SimpleXMLElement::class, LIBXML_NONET );
-		libxml_clear_errors();
-		libxml_use_internal_errors( $previous );
+		$document = Xml::load( $xml );
 
-		if ( false === $document ) {
+		if ( null === $document ) {
 			throw new \RuntimeException( 'Could not parse the CORS configuration.' );
 		}
 
 		$rules = array();
 
-		foreach ( self::children( $document, 'CORSRule' ) as $node ) {
+		foreach ( Xml::children( $document, 'CORSRule' ) as $node ) {
 			$rules[] = Rule::from_array(
 				array(
-					'ID'             => (string) ( self::children( $node, 'ID' )[0] ?? '' ),
-					'AllowedOrigins' => self::strings( self::children( $node, 'AllowedOrigin' ) ),
-					'AllowedMethods' => self::strings( self::children( $node, 'AllowedMethod' ) ),
-					'AllowedHeaders' => self::strings( self::children( $node, 'AllowedHeader' ) ),
-					'ExposeHeaders'  => self::strings( self::children( $node, 'ExposeHeader' ) ),
-					'MaxAgeSeconds'  => (int) (string) ( self::children( $node, 'MaxAgeSeconds' )[0] ?? '' ),
+					'ID'             => Xml::text( $node, 'ID' ),
+					'AllowedOrigins' => self::strings( Xml::children( $node, 'AllowedOrigin' ) ),
+					'AllowedMethods' => self::strings( Xml::children( $node, 'AllowedMethod' ) ),
+					'AllowedHeaders' => self::strings( Xml::children( $node, 'AllowedHeader' ) ),
+					'ExposeHeaders'  => self::strings( Xml::children( $node, 'ExposeHeader' ) ),
+					'MaxAgeSeconds'  => (int) Xml::text( $node, 'MaxAgeSeconds' ),
 				)
 			);
 		}
@@ -446,33 +443,6 @@ final readonly class Policy implements \Countable, \IteratorAggregate {
 		return '    <' . $name . '>'
 			. htmlspecialchars( $value, ENT_XML1 | ENT_COMPAT, 'UTF-8' )
 			. '</' . $name . '>' . "\n";
-	}
-
-	/**
-	 * The child elements with one name, in any namespace S3 answered in.
-	 *
-	 * By name rather than as SimpleXML properties, which read as camel-case
-	 * properties to the coding standard and would be the only ones here.
-	 *
-	 * @since 1.0.0
-	 *
-	 * @param \SimpleXMLElement $node Parent.
-	 * @param string            $name Element name.
-	 *
-	 * @return array<int, \SimpleXMLElement>
-	 */
-	private static function children( \SimpleXMLElement $node, string $name ): array {
-		// The element's own namespace, whichever that is: S3 answers in its
-		// 2006-03-01 one and some providers in none at all.
-		$found = array();
-
-		foreach ( $node->children( (string) ( $node->getNamespaces()[''] ?? '' ) ) as $child ) {
-			if ( $child->getName() === $name ) {
-				$found[] = $child;
-			}
-		}
-
-		return $found;
 	}
 
 	/**

@@ -24,14 +24,13 @@ namespace SugarCommerce\Storage\Browser\Rest;
 use SugarCommerce\Storage\Utils\Runtime;
 use SugarCommerce\Storage\S3\Transport;
 use SugarCommerce\Storage\Browser\Client;
-use SugarCommerce\Storage\Browser\Interfaces\Response as ResponseInterface;
-use SugarCommerce\Storage\Browser\Responses\ErrorResponse;
 use SugarCommerce\Storage\S3\Cors\Origin;
 use SugarCommerce\Storage\Browser\Tables\Objects;
 use SugarCommerce\Storage\Browser\Utils\Directory;
 use SugarCommerce\Storage\Browser\Utils\Sanitize;
 use SugarCommerce\Storage\Browser\Utils\Timestamp;
 use SugarCommerce\Storage\Browser\Utils\Validate;
+use SugarCommerce\Storage\Files\Filename;
 use Closure;
 use InvalidArgumentException;
 use WP_Error;
@@ -575,32 +574,6 @@ class Controller {
 	}
 
 	/**
-	 * Relay a failed client response to the caller.
-	 *
-	 * Keeps the provider's own code and status rather than inventing one. The
-	 * code is what distinguishes a bucket-scoped token from wrong credentials,
-	 * and replacing it leaves the admin re-entering keys that were never the
-	 * problem.
-	 *
-	 * @param ResponseInterface $response Failed response.
-	 *
-	 * @return WP_Error
-	 */
-	private function rest_relay( ResponseInterface $response ): WP_Error {
-		if ( $response instanceof ErrorResponse ) {
-			return $response->to_wp_error();
-		}
-
-		// is_successful() is a flag rather than a type, so a failure that is
-		// not an ErrorResponse is possible even if nothing produces one today.
-		return new WP_Error(
-			'rest_upstream_failed',
-			__( 'The storage provider rejected the request.', 'sugarcommerce' ),
-			[ 'status' => 502 ]
-		);
-	}
-
-	/**
 	 * Build an error response from a failed S3 operation
 	 *
 	 * @param string $code    Error code.
@@ -622,8 +595,8 @@ class Controller {
 		// Account-level ListBuckets works for admin / master tokens.
 		$result = $this->client->get_bucket_count();
 
-		if ( $result->is_successful() ) {
-			$data = $result->get_data();
+		if ( ! is_wp_error( $result ) ) {
+			$data = $result;
 
 			return $this->rest_ok( [
 				'status'  => 'ok',
@@ -659,7 +632,7 @@ class Controller {
 		if ( '' !== $fallback_bucket ) {
 			$exists = $this->client->bucket_exists( $fallback_bucket, false );
 
-			if ( $exists->is_successful() ) {
+			if ( ! is_wp_error( $exists ) && $exists['exists'] ) {
 				return $this->rest_ok( [
 					'status'  => 'ok',
 					'message' => __( 'Connection successful.', 'sugarcommerce' ),
@@ -684,7 +657,7 @@ class Controller {
 					/* translators: 1: bucket name, 2: error from the provider */
 					__( 'The credentials work, but "%1$s" could not be reached: %2$s', 'sugarcommerce' ),
 					$fallback_bucket,
-					$exists->get_error_message()
+					is_wp_error( $exists ) ? $exists->get_error_message() : __( 'The bucket does not exist.', 'sugarcommerce' )
 				),
 				'scoped'  => $scoped,
 			] );
@@ -731,13 +704,11 @@ class Controller {
 	 */
 	public function rest_get_bucket_details( WP_REST_Request $request ) {
 		$bucket = (string) $request['bucket'];
-		$result = $this->client->get_bucket_details( $bucket, Origin::current(), false );
+		$data = $this->client->get_bucket_details( $bucket, Origin::current(), false );
 
-		if ( ! $result->is_successful() ) {
-			return $this->rest_relay( $result );
+		if ( is_wp_error( $data ) ) {
+			return $data;
 		}
-
-		$data = $result->get_data();
 
 		// The debug payload carries raw provider error strings; it is a
 		// development aid, not something to ship to every browser.
@@ -784,8 +755,8 @@ class Controller {
 
 		$result = $this->client->delete_object( $bucket, $key );
 
-		if ( ! $result->is_successful() ) {
-			return $this->rest_relay( $result );
+		if ( is_wp_error( $result ) ) {
+			return $result;
 		}
 
 		$this->client->cache()->flush_bucket( $bucket );
@@ -809,9 +780,9 @@ class Controller {
 		$current_key  = (string) $request['current_key'];
 		$new_filename = (string) $request['new_filename'];
 
-		$validation = Validate::filename( $new_filename );
-		if ( ! $validation['valid'] ) {
-			return $this->rest_fail( 'rest_invalid_filename', $validation['message'] );
+		$problem = Filename::problem( $new_filename );
+		if ( '' !== $problem ) {
+			return $this->rest_fail( 'rest_invalid_filename', $problem );
 		}
 
 		if ( Directory::is_rename_same_key( $current_key, $new_filename ) ) {
@@ -823,8 +794,8 @@ class Controller {
 
 		$new_key = Directory::build_rename_key( $current_key, $new_filename );
 
-		$exists = $this->client->object_exists( $bucket, $new_key );
-		if ( $exists->is_successful() && ( $exists->get_data()['exists'] ?? false ) ) {
+		$exists = $this->client->object_exists( $bucket, $new_key, false );
+		if ( ! is_wp_error( $exists ) && $exists['exists'] ) {
 			return $this->rest_fail(
 				'rest_rename_conflict',
 				/* translators: %s: new filename */
@@ -835,8 +806,8 @@ class Controller {
 
 		$result = $this->client->rename_object( $bucket, $current_key, $new_key );
 
-		if ( ! $result->is_successful() ) {
-			return $this->rest_relay( $result );
+		if ( is_wp_error( $result ) ) {
+			return $result;
 		}
 
 		$this->client->cache()->flush_bucket( $bucket );
@@ -893,9 +864,9 @@ class Controller {
 			);
 		}
 
-		$exists = $this->client->object_exists( $bucket, $new_key );
+		$exists = $this->client->object_exists( $bucket, $new_key, false );
 
-		if ( $exists->is_successful() && ( $exists->get_data()['exists'] ?? false ) ) {
+		if ( ! is_wp_error( $exists ) && $exists['exists'] ) {
 			return $this->rest_fail(
 				'rest_move_conflict',
 				sprintf(
@@ -909,8 +880,8 @@ class Controller {
 
 		$result = $this->client->rename_object( $bucket, $current_key, $new_key );
 
-		if ( ! $result->is_successful() ) {
-			return $this->rest_relay( $result );
+		if ( is_wp_error( $result ) ) {
+			return $result;
 		}
 
 		$this->client->cache()->flush_bucket( $bucket );
@@ -990,23 +961,23 @@ class Controller {
 		$key     = (string) $request['key'];
 		$minutes = Sanitize::minutes( (int) $request['expires_minutes'] );
 
-		$exists = $this->client->object_exists( $bucket, $key );
-		if ( ! $exists->is_successful() ) {
+		$exists = $this->client->object_exists( $bucket, $key, false );
+		if ( is_wp_error( $exists ) ) {
 			return $this->rest_fail( 'rest_object_check_failed', __( 'Error checking if file exists', 'sugarcommerce' ), 502 );
 		}
 
-		if ( ! ( $exists->get_data()['exists'] ?? false ) ) {
+		if ( ! $exists['exists'] ) {
 			return $this->rest_fail( 'rest_object_not_found', __( 'File does not exist', 'sugarcommerce' ), 404 );
 		}
 
-		$result = $this->client->get_presigned_url( $bucket, $key, $minutes );
+		$url = $this->client->get_presigned_url( $bucket, $key, $minutes );
 
-		if ( ! $result->is_successful() ) {
-			return $this->rest_relay( $result );
+		if ( is_wp_error( $url ) ) {
+			return $url;
 		}
 
 		return $this->rest_ok( [
-			'url'        => $result->get_url(),
+			'url'        => $url,
 			'expires_at' => Timestamp::in_minutes( $minutes ),
 			'expires_in' => $minutes,
 			'bucket'     => $bucket,
@@ -1030,16 +1001,16 @@ class Controller {
 		$bucket = (string) $request['bucket'];
 		$key    = (string) $request['key'];
 
-		$result = $this->client->get_presigned_upload_url( $bucket, $key );
+		$url = $this->client->get_presigned_upload_url( $bucket, $key );
 
-		if ( ! $result->is_successful() ) {
-			return $this->rest_relay( $result );
+		if ( is_wp_error( $url ) ) {
+			return $url;
 		}
 
 		$this->client->cache()->flush_bucket( $bucket );
 
 		return $this->rest_ok( [
-			'url'     => $result->get_url(),
+			'url'     => $url,
 			'expires' => Timestamp::in_minutes( 15 ),
 		] );
 	}
@@ -1060,18 +1031,18 @@ class Controller {
 		$bucket = (string) $request['bucket'];
 		$prefix = (string) $request['prefix'];
 
-		$result = $this->client->get_object_models( $bucket, 1000, $prefix, '/' );
+		$result = $this->client->get_objects( $bucket, 1000, $prefix, '/' );
 
-		if ( ! $result->is_successful() ) {
-			return $this->rest_relay( $result );
+		if ( is_wp_error( $result ) ) {
+			return $result;
 		}
 
 		$folders = [];
 
-		foreach ( $result->get_data()['prefixes'] ?? [] as $folder ) {
+		foreach ( $result['prefixes'] as $folder ) {
 			$folders[] = [
-				'name'   => $folder->get_folder_name(),
-				'prefix' => $folder->get_prefix(),
+				'name'   => Directory::name( $folder ),
+				'prefix' => $folder,
 			];
 		}
 
@@ -1102,8 +1073,8 @@ class Controller {
 		$folder_key = Directory::build_folder_key( $prefix, $folder_name );
 		$result     = $this->client->create_folder( $bucket, $folder_key );
 
-		if ( ! $result->is_successful() ) {
-			return $this->rest_relay( $result );
+		if ( is_wp_error( $result ) ) {
+			return $result;
 		}
 
 		$this->client->cache()->flush_bucket( $bucket );
@@ -1138,15 +1109,13 @@ class Controller {
 			);
 		}
 
-		$result = $this->delete_folder_with_fallback( $bucket, $folder_path );
-
-		if ( ! $result->is_successful() ) {
-			return $this->rest_relay( $result );
-		}
+		$data = $this->client->delete_folder( $bucket, $folder_path );
 
 		$this->client->cache()->flush_bucket( $bucket );
 
-		$data = $result->get_data();
+		if ( is_wp_error( $data ) ) {
+			return $data;
+		}
 
 		return $this->rest_ok( [
 			'message'     => $this->format_folder_deletion_message( $data ),
@@ -1175,7 +1144,7 @@ class Controller {
 
 		$result = $this->client->set_cors_scenario( $bucket, 'upload_only', [ $origin ] );
 
-		if ( ! $result->is_successful() ) {
+		if ( is_wp_error( $result ) ) {
 			// AccessDenied on PutBucketCors is not a transient failure and no
 			// amount of retrying fixes it: R2 API tokens carry a permission
 			// level, and a token with Object Read & Write can upload objects
@@ -1188,7 +1157,7 @@ class Controller {
 				$result->get_error_code(),
 				[ 'AccessDenied', 'access_denied' ],
 				true
-			) || 403 === $result->get_status_code();
+			) || 403 === ( ( (array) $result->get_error_data() )['status'] ?? 0 );
 
 			return $this->rest_fail(
 				$denied ? 'rest_cors_permission_denied' : 'rest_cors_setup_failed',
@@ -1202,8 +1171,7 @@ class Controller {
 		$this->client->cache()->flush_bucket( $bucket );
 
 		$verification = $this->client->cors_allows_upload( $bucket, $origin, false );
-		$verified     = $verification->is_successful()
-			&& ( $verification->get_data()['allows_upload'] ?? false );
+		$verified     = ! is_wp_error( $verification ) && $verification['allows_upload'];
 
 		return $this->rest_ok( [
 			'bucket'              => $bucket,
@@ -1226,8 +1194,8 @@ class Controller {
 		$bucket = (string) $request['bucket'];
 		$result = $this->client->delete_cors_configuration( $bucket );
 
-		if ( ! $result->is_successful() ) {
-			return $this->rest_relay( $result );
+		if ( is_wp_error( $result ) ) {
+			return $result;
 		}
 
 		$this->client->cache()->flush_bucket( $bucket );
@@ -1236,32 +1204,6 @@ class Controller {
 			'bucket'  => $bucket,
 			'message' => __( 'CORS configuration removed', 'sugarcommerce' ),
 		] );
-	}
-
-	/**
-	 * Delete a folder, falling back to per-object deletion
-	 *
-	 * Batch deletion is more efficient for large folders, but not every
-	 * S3-compatible provider implements it, and it can time out. Fall back only
-	 * on error codes that indicate the batch path itself was the problem.
-	 *
-	 * @param string $bucket      Bucket name.
-	 * @param string $folder_path Raw folder path (normalized downstream).
-	 *
-	 * @return \SugarCommerce\Storage\Browser\Interfaces\Response
-	 */
-	private function delete_folder_with_fallback( string $bucket, string $folder_path ) {
-		$result = $this->client->delete_folder_batch( $bucket, $folder_path );
-
-		if ( ! $result->is_successful() ) {
-			$recoverable = [ 'batch_delete_timeout', 'batch_delete_not_supported', 'network_error' ];
-
-			if ( in_array( $result->get_error_code(), $recoverable, true ) ) {
-				$result = $this->client->delete_folder( $bucket, $folder_path, true, true );
-			}
-		}
-
-		return $result;
 	}
 
 	/**

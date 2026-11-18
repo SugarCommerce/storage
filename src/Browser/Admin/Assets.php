@@ -18,7 +18,7 @@ namespace SugarCommerce\Storage\Browser\Admin;
 use SugarCommerce\Storage\Utils\Runtime;
 use SugarCommerce\Storage\Browser\Rest\Controller;
 use SugarCommerce\Storage\Files\Mime;
-use SugarCommerce\Storage\Utils\Assets as AssetFiles;
+use SugarCommerce\Plugin\Assets as AssetFiles;
 
 /**
  * Class Assets
@@ -113,7 +113,7 @@ class Assets {
 	 * @return void
 	 */
 	public static function enqueue_admin_style(): void {
-		AssetFiles::enqueue_style( Runtime::handle( 'admin' ), 'css/admin.css' );
+		AssetFiles::enqueue_style( Runtime::handle( 'admin' ), __FILE__, 'css/admin.css' );
 	}
 
 	/**
@@ -130,9 +130,10 @@ class Assets {
 
 		$config_handle = $this->enqueue_global_config();
 
-		AssetFiles::enqueue_style( Runtime::handle( 'admin' ), 'css/admin.css' );
+		AssetFiles::enqueue_style( Runtime::handle( 'admin' ), __FILE__, 'css/admin.css' );
 		AssetFiles::enqueue_script(
 			Runtime::handle( 'connection' ),
+			__FILE__,
 			'js/admin/connection.js',
 			[ 'jquery', 'wp-util', $config_handle ]
 		);
@@ -279,6 +280,7 @@ class Assets {
 	private function enqueue_host_integration(): void {
 		AssetFiles::enqueue_script(
 			Runtime::handle( 'browser-host' ),
+			__FILE__,
 			'js/integrations/host.js',
 			[ 'jquery', 'wp-util', 'media-views', $this->enqueue_global_config() ]
 		);
@@ -292,11 +294,11 @@ class Assets {
 	private function enqueue_browser(): void {
 		$config_handle = $this->enqueue_global_config();
 
-		AssetFiles::enqueue_style( Runtime::handle( 'browser' ), 'css/browser.css' );
-		AssetFiles::enqueue_style( Runtime::handle( 'upload' ), 'css/upload.css' );
+		AssetFiles::enqueue_style( Runtime::handle( 'browser' ), __FILE__, 'css/browser.css' );
+		AssetFiles::enqueue_style( Runtime::handle( 'upload' ), __FILE__, 'css/upload.css' );
 
 		foreach ( self::browser_scripts( $config_handle ) as $handle => [ $file, $deps ] ) {
-			if ( AssetFiles::enqueue_script( $handle, $file, $deps ) && Runtime::handle( 'browser-core' ) === $handle ) {
+			if ( AssetFiles::enqueue_script( $handle, __FILE__, $file, $deps ) && Runtime::handle( 'browser-core' ) === $handle ) {
 				$this->browser_loaded = true;
 			}
 		}
@@ -320,6 +322,7 @@ class Assets {
 
 		AssetFiles::enqueue_script(
 			Runtime::handle( $handle ),
+			__FILE__,
 			$file,
 			[ 'jquery', 'wp-util', $this->enqueue_global_config() ]
 		);

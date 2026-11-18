@@ -58,6 +58,14 @@ if ( ! defined( 'WP_CONTENT_DIR' ) ) {
 	define( 'WP_CONTENT_DIR', ABSPATH . 'wp-content' );
 }
 
+/*
+ * This checkout, as a plugin symlinked into the stub site. That is how
+ * SugarCommerce\Plugin\Assets -- which finds the package's icons, styles and
+ * scripts -- maps a folder outside wp-content back to a URL, and without a URL
+ * it finds nothing.
+ */
+$GLOBALS['wp_plugin_paths'][ WP_CONTENT_DIR . '/plugins/storage' ] = dirname( __DIR__ );
+
 foreach ( [ 'MINUTE_IN_SECONDS' => 60, 'HOUR_IN_SECONDS' => 3600, 'DAY_IN_SECONDS' => 86400, 'WEEK_IN_SECONDS' => 604800, 'KB_IN_BYTES' => 1024, 'MB_IN_BYTES' => 1048576, 'GB_IN_BYTES' => 1073741824 ] as $constant => $value ) {
 	if ( ! defined( $constant ) ) {
 		define( $constant, $value );
@@ -74,6 +82,7 @@ function wp_test_reset(): void {
 	$GLOBALS['wp_test_meta']              = [];
 	$GLOBALS['wp_test_hooks']             = [];
 	$GLOBALS['wp_test_filters']           = [];
+	$GLOBALS['wp_test_apache_modules']    = [];
 	$GLOBALS['wp_test_did_action']        = [];
 	$GLOBALS['wp_test_uploads']           = sys_get_temp_dir() . '/sugarcommerce-storage-tests/uploads';
 	$GLOBALS['wp_test_post_types']        = [];
@@ -381,6 +390,27 @@ if ( ! function_exists( 'wp_upload_dir' ) ) {
 			'subdir'  => '',
 			'error'   => false,
 		];
+	}
+}
+
+if ( ! function_exists( 'apache_mod_loaded' ) ) {
+	/**
+	 * Core's, with the module list a test sets in place of Apache's.
+	 */
+	function apache_mod_loaded( $mod, $default_value = false ) {
+		$software = (string) ( $_SERVER['SERVER_SOFTWARE'] ?? '' );
+
+		if ( ! str_contains( $software, 'Apache' ) && ! str_contains( $software, 'LiteSpeed' ) ) {
+			return false;
+		}
+
+		return in_array( $mod, (array) ( $GLOBALS['wp_test_apache_modules'] ?? [] ), true ) ? true : $default_value;
+	}
+}
+
+if ( ! function_exists( 'wp_basename' ) ) {
+	function wp_basename( $path, $suffix = '' ) {
+		return urldecode( basename( str_replace( array( '%2F', '%5C' ), '/', urlencode( $path ) ), $suffix ) );
 	}
 }
 

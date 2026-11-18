@@ -35,11 +35,7 @@ final class RelativeDateTest extends TestCase {
 		$table = ( new ReflectionClass( Buckets::class ) )->newInstanceWithoutConstructor();
 		$item  = [
 			'created' => '17 Nov 2026',
-			'raw'     => new class() {
-				public function get_creation_date(): string {
-					return '2026-11-16T10:00:00Z';
-				}
-			},
+			'raw'     => '2026-11-16T10:00:00Z',
 		];
 
 		$this->assertSame( '17 Nov 2026<br><small class="description">il y a 2 days</small>', $table->column_created( $item ) );

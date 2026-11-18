@@ -221,6 +221,10 @@ final class Mime {
 			return null;
 		}
 
+		// Not wp_get_default_extension_for_mime_type(): that matches the type
+		// exactly, and core's own table spells some in mixed case
+		// (`…macroEnabled.12`), so a type given in lower case -- as headers
+		// and this method's callers usually give it -- would find nothing.
 		foreach ( wp_get_mime_types() as $extensions => $known ) {
 			if ( strtolower( $known ) === $type ) {
 				return (string) strtok( $extensions, '|' );

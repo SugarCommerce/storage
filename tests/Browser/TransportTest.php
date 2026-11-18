@@ -9,7 +9,7 @@ use SugarCommerce\Storage\Tests\Support\FakeHttp;
 use PHPUnit\Framework\TestCase;
 
 /**
- * A request driven end to end: sign, send, parse, model.
+ * A request driven end to end: sign, send, parse, model -- through S3\Bucket.
  *
  * This is the layer that had no coverage, and every defect found in this
  * release cycle lived in it — an error parser that never matched a real S3
@@ -33,7 +33,7 @@ final class TransportTest extends TestCase {
 	public function test_objects_and_folders_are_parsed(): void {
 		FakeHttp::queue_fixture( 'list-objects.xml' );
 
-		$data = $this->client()->get_object_models( 'test-bucket', 1000, 'testing/' )->get_data();
+		$data = $this->client()->get_objects( 'test-bucket', 1000, 'testing/' );
 
 		$this->assertCount( 2, $data['objects'] );
 		$this->assertCount( 1, $data['prefixes'] );
@@ -44,7 +44,7 @@ final class TransportTest extends TestCase {
 	public function test_unicode_keys_survive_parsing(): void {
 		FakeHttp::queue_fixture( 'list-objects.xml' );
 
-		$data = $this->client()->get_object_models( 'test-bucket', 1000, 'testing/' )->get_data();
+		$data = $this->client()->get_objects( 'test-bucket', 1000, 'testing/' );
 
 		$this->assertSame( 'Déjà vu.wav', $data['objects'][1]->get_filename() );
 	}
@@ -52,7 +52,7 @@ final class TransportTest extends TestCase {
 	public function test_truncation_and_continuation_token_are_surfaced(): void {
 		FakeHttp::queue_fixture( 'list-objects-truncated.xml' );
 
-		$data = $this->client()->get_object_models( 'test-bucket' )->get_data();
+		$data = $this->client()->get_objects( 'test-bucket' );
 
 		$this->assertTrue( $data['truncated'] );
 		$this->assertSame( '1ueGcxLPRx1Tr/XYExHnhbYLgveDs2J/wm36Hy4vbOwM=', $data['continuation_token'] );
@@ -68,7 +68,7 @@ final class TransportTest extends TestCase {
 	public function test_prefix_with_a_space_is_sent_rfc3986_encoded(): void {
 		FakeHttp::queue_fixture( 'list-objects.xml' );
 
-		$this->client()->get_object_models( 'test-bucket', 1000, 'my photos/' );
+		$this->client()->get_objects( 'test-bucket', 1000, 'my photos/' );
 
 		$url = FakeHttp::last()['url'];
 
@@ -79,7 +79,7 @@ final class TransportTest extends TestCase {
 	public function test_request_is_signed(): void {
 		FakeHttp::queue_fixture( 'list-objects.xml' );
 
-		$this->client()->get_object_models( 'test-bucket' );
+		$this->client()->get_objects( 'test-bucket' );
 
 		$headers = FakeHttp::last()['args']['headers'];
 
@@ -91,7 +91,7 @@ final class TransportTest extends TestCase {
 	public function test_path_style_provider_puts_the_bucket_in_the_path(): void {
 		FakeHttp::queue_fixture( 'list-objects.xml' );
 
-		$this->client()->get_object_models( 'test-bucket' );
+		$this->client()->get_objects( 'test-bucket' );
 
 		$this->assertStringContainsString( '.r2.cloudflarestorage.com/test-bucket', FakeHttp::last()['url'] );
 	}
@@ -105,16 +105,16 @@ final class TransportTest extends TestCase {
 	public function test_r2_error_without_a_prolog_is_parsed(): void {
 		FakeHttp::queue_fixture( 'error-access-denied-r2.xml', 403 );
 
-		$result = $this->client()->get_object_models( 'test-bucket' );
+		$result = $this->client()->get_objects( 'test-bucket' );
 
-		$this->assertFalse( $result->is_successful() );
+		$this->assertInstanceOf( \WP_Error::class, $result );
 		$this->assertSame( 'AccessDenied', $result->get_error_code() );
 	}
 
 	public function test_no_such_bucket_is_reported_as_itself(): void {
 		FakeHttp::queue_fixture( 'error-no-such-bucket.xml', 404 );
 
-		$result = $this->client()->get_object_models( 'nope' );
+		$result = $this->client()->get_objects( 'nope' );
 
 		$this->assertSame( 'NoSuchBucket', $result->get_error_code() );
 		$this->assertStringContainsString( 'does not exist', $result->get_error_message() );
@@ -125,7 +125,7 @@ final class TransportTest extends TestCase {
 
 		$this->assertSame(
 			'SignatureDoesNotMatch',
-			$this->client()->get_object_models( 'test-bucket' )->get_error_code()
+			$this->client()->get_objects( 'test-bucket' )->get_error_code()
 		);
 	}
 
@@ -136,18 +136,18 @@ final class TransportTest extends TestCase {
 	public function test_scoped_token_listing_denial_is_its_own_condition(): void {
 		FakeHttp::queue_fixture( 'error-access-denied-r2.xml', 403 );
 
-		$result = $this->client()->get_bucket_models();
+		$result = $this->client()->get_buckets( false );
 
-		$this->assertFalse( $result->is_successful() );
+		$this->assertInstanceOf( \WP_Error::class, $result );
 		$this->assertSame( 'bucket_listing_forbidden', $result->get_error_code() );
 	}
 
 	public function test_non_xml_error_body_falls_back_without_crashing(): void {
 		FakeHttp::queue( 502, 'upstream connect error' );
 
-		$result = $this->client()->get_object_models( 'test-bucket' );
+		$result = $this->client()->get_objects( 'test-bucket' );
 
-		$this->assertFalse( $result->is_successful() );
+		$this->assertInstanceOf( \WP_Error::class, $result );
 		$this->assertNotSame( '', $result->get_error_message() );
 	}
 
@@ -156,10 +156,12 @@ final class TransportTest extends TestCase {
 	public function test_bucket_listing_is_parsed(): void {
 		FakeHttp::queue_fixture( 'list-buckets.xml' );
 
-		$data = $this->client()->get_bucket_models()->get_data();
+		$data = $this->client()->get_buckets( false );
 
 		$this->assertCount( 2, $data['buckets'] );
-		$this->assertSame( 'test-bucket', $data['buckets'][0]->get_name() );
+		$this->assertSame( 'test-bucket', $data['buckets'][0]['name'] );
+		$this->assertSame( '2025-12-24T10:07:59.000Z', $data['buckets'][0]['created'] );
+		$this->assertFalse( $data['scoped'] );
 	}
 
 	/**
@@ -173,63 +175,10 @@ final class TransportTest extends TestCase {
 		$client = $this->client();
 		$client->set_known_buckets( [ 'test-bucket' ] );
 
-		$data = $client->get_bucket_models()->get_data();
+		$data = $client->get_buckets( false );
 
 		$this->assertCount( 1, $data['buckets'] );
-		$this->assertSame( 'test-bucket', $data['buckets'][0]->get_name() );
+		$this->assertSame( 'test-bucket', $data['buckets'][0]['name'] );
 		$this->assertTrue( $data['scoped'] );
-	}
-
-	/**
-	 * Uploading an object server-side.
-	 *
-	 * The browser uploads through a presigned URL from the client, so this
-	 * path had no caller in either plugin and no test -- which in this library
-	 * has repeatedly meant "quietly broken". It is the building block any
-	 * migration of existing files to storage would use.
-	 */
-	public function test_put_object_sends_the_body_and_content_type(): void {
-		$file = tempnam( sys_get_temp_dir(), 's3' );
-		file_put_contents( $file, 'hello world' );
-
-		FakeHttp::queue( 200, '', [ 'etag' => '"abc123"' ] );
-
-		$result = $this->client()->put_object( 'test-bucket', 'docs/hello.txt', $file, true, 'text/plain' );
-
-		unlink( $file );
-
-		$this->assertTrue( $result->is_successful(), $result->is_successful() ? '' : $result->get_error_message() );
-
-		$request = FakeHttp::requests()[0];
-
-		$this->assertSame( 'PUT', strtoupper( $request['args']['method'] ) );
-		$this->assertSame( 'hello world', $request['args']['body'] );
-		$this->assertStringContainsString( 'docs/hello.txt', $request['url'] );
-		$this->assertSame( 'text/plain', $request['args']['headers']['Content-Type'] ?? null );
-	}
-
-	public function test_put_object_accepts_a_body_rather_than_a_path(): void {
-		FakeHttp::queue( 200 );
-
-		$result = $this->client()->put_object( 'test-bucket', 'notes.txt', 'inline content', false, 'text/plain' );
-
-		$this->assertTrue( $result->is_successful() );
-		$this->assertSame( 'inline content', FakeHttp::requests()[0]['args']['body'] );
-	}
-
-	public function test_put_object_reports_a_missing_file(): void {
-		$result = $this->client()->put_object( 'test-bucket', 'gone.txt', '/no/such/file', true );
-
-		$this->assertFalse( $result->is_successful() );
-		$this->assertSame( [], FakeHttp::requests(), 'Nothing should be sent for a file that is not there' );
-	}
-
-	public function test_put_object_relays_a_refusal(): void {
-		FakeHttp::queue_fixture( 'error-access-denied-r2.xml', 403 );
-
-		$result = $this->client()->put_object( 'test-bucket', 'denied.txt', 'content', false );
-
-		$this->assertFalse( $result->is_successful() );
-		$this->assertSame( 'AccessDenied', $result->get_error_code() );
 	}
 }

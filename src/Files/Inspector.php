@@ -15,7 +15,7 @@ namespace SugarCommerce\Storage\Files;
 /**
  * Looking at what was actually uploaded.
  *
- * Not a virus engine (see Scan\Panel for one). It answers a narrower question that matters more to a
+ * Not a virus engine. It answers a narrower question that matters more to a
  * host: is this file what its name says it is, and is it the kind of thing
  * you are willing to be a distribution channel for.
  *

@@ -4,13 +4,15 @@
  *
  * @package     SugarCommerce\Storage
  * @copyright   Copyright (c) 2026, ArrayPress Limited
- * @license     GPL2+
+ * @license     GPL-2.0-or-later
  * @since       1.0.0
  */
 
 declare( strict_types=1 );
 
 namespace SugarCommerce\Storage\Files;
+
+use SugarCommerce\Plugin\Assets;
 
 /**
  * Where a file is, and whether it is where it is supposed to be.
@@ -178,9 +180,14 @@ final class Path {
 	/**
 	 * A local path's URL.
 	 *
+	 * Uploads first: they can be configured to live outside the content
+	 * folder, at a URL of their own that only wp_upload_dir() knows. Anything
+	 * else is SugarCommerce\Plugin\Assets::path_to_url()'s -- the content
+	 * folder, the WordPress root, and plugins symlinked in from elsewhere.
+	 *
 	 * @param string $path The path.
 	 *
-	 * @return string|null
+	 * @return string|null Null when WordPress serves nothing there.
 	 */
 	public static function to_url( string $path ): ?string {
 		if ( '' === $path ) {
@@ -189,22 +196,13 @@ final class Path {
 
 		$path    = self::normalize( $path );
 		$uploads = wp_upload_dir();
+		$base    = rtrim( self::normalize( (string) ( $uploads['basedir'] ?? '' ) ), '/' );
 
-		foreach (
-			[
-				[ self::normalize( (string) ( $uploads['basedir'] ?? '' ) ), (string) ( $uploads['baseurl'] ?? '' ) ],
-				[ self::normalize( WP_CONTENT_DIR ), content_url() ],
-				[ self::normalize( untrailingslashit( ABSPATH ) ), untrailingslashit( home_url() ) ],
-			] as [ $directory, $prefix ]
-		) {
-			if ( '' === $directory || ! str_starts_with( $path, $directory ) ) {
-				continue;
-			}
-
-			return $prefix . substr( $path, strlen( $directory ) );
+		if ( '' !== $base && str_starts_with( $path, $base . '/' ) ) {
+			return rtrim( (string) ( $uploads['baseurl'] ?? '' ), '/' ) . substr( $path, strlen( $base ) );
 		}
 
-		return null;
+		return Assets::path_to_url( $path );
 	}
 
 	/**

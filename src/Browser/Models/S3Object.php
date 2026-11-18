@@ -1,14 +1,11 @@
 <?php
 /**
- * S3 Object Model - Streamlined Edition
+ * S3 Object
  *
- * Represents an S3 object with consolidated methods for better performance.
- *
- * @package     SugarCommerce\Storage\Browser\Models
- * @copyright   Copyright (c) 2025, ArrayPress Limited
- * @license     GPL2+
- * @version     1.0.0
- * @author      David Sherlock
+ * @package     SugarCommerce\Storage
+ * @copyright   Copyright (c) 2026, ArrayPress Limited
+ * @license     GPL-2.0-or-later
+ * @since       1.0.0
  */
 
 declare( strict_types=1 );
@@ -18,10 +15,13 @@ namespace SugarCommerce\Storage\Browser\Models;
 use SugarCommerce\Storage\Utils\Runtime;
 use SugarCommerce\Storage\Files\Filename;
 use SugarCommerce\Storage\Files\Mime;
-use WP_Error;
 
 /**
  * Class S3Object
+ *
+ * One file in a listing, as the browser shows it: its name, size and date
+ * formatted, its type, the data attributes the scripts read, and whether it
+ * is hidden from the listing at all.
  */
 class S3Object {
 
@@ -62,16 +62,16 @@ class S3Object {
 
 
 	/**
-	 * Constructor
+	 * Build one from a line of S3\Bucket::list().
 	 *
-	 * @param array $data Object data from S3 API
+	 * @param array{key?: string, size?: int, last_modified?: string, etag?: string, storage_class?: string} $data The listed object.
 	 */
 	public function __construct( array $data ) {
-		$this->key           = $data['Key'] ?? '';
-		$this->size          = (int) ( $data['Size'] ?? 0 );
-		$this->last_modified = $data['LastModified'] ?? '';
-		$this->etag          = isset( $data['ETag'] ) ? trim( $data['ETag'], '"' ) : '';
-		$this->storage_class = $data['StorageClass'] ?? 'STANDARD';
+		$this->key           = (string) ( $data['key'] ?? '' );
+		$this->size          = (int) ( $data['size'] ?? 0 );
+		$this->last_modified = (string) ( $data['last_modified'] ?? '' );
+		$this->etag          = trim( (string) ( $data['etag'] ?? '' ), '"' );
+		$this->storage_class = (string) ( $data['storage_class'] ?? 'STANDARD' );
 	}
 
 
@@ -174,28 +174,6 @@ class S3Object {
 	}
 
 	/**
-	 * Convert to array
-	 *
-	 * @return array
-	 */
-	public function to_array(): array {
-		return [
-			'Key'           => $this->key,
-			'Filename'      => $this->get_filename(),
-			'LastModified'  => $this->last_modified,
-			'FormattedDate' => $this->get_last_modified( true ),
-			'ETag'          => $this->etag,
-			'Size'          => $this->size,
-			'FormattedSize' => $this->get_size( true ),
-			'StorageClass'  => $this->storage_class,
-			'MimeType'      => $this->get_mime_type(),
-			'Category'      => $this->get_category(),
-			'IsMultipart'   => $this->is_multipart(),
-			'MD5Checksum'   => $this->get_md5_checksum(),
-		];
-	}
-
-	/**
 	 * Get object filename (without path)
 	 *
 	 * @return string
@@ -256,30 +234,6 @@ class S3Object {
 	 */
 	public function get_category(): string {
 		return Mime::category( $this->get_filename() );
-	}
-
-	/**
-	 * Get dashicon class for this file type
-	 *
-	 * @return string Dashicon class
-	 */
-	public function get_dashicon_class(): string {
-		$category = $this->get_category();
-
-		switch ( $category ) {
-			case 'image':
-				return 'dashicons-format-image';
-			case 'video':
-				return 'dashicons-media-video';
-			case 'audio':
-				return 'dashicons-media-audio';
-			case 'document':
-				return 'dashicons-media-document';
-			case 'archive':
-				return 'dashicons-media-archive';
-			default:
-				return 'dashicons-media-default';
-		}
 	}
 
 	/**

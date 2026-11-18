@@ -8,7 +8,7 @@ use PHPUnit\Framework\TestCase;
 use SugarCommerce\Storage\Browser\Client;
 use SugarCommerce\Storage\S3\Account;
 use SugarCommerce\Storage\Tests\Support\FakeHttp;
-use InvalidArgumentException;
+use WP_Error;
 
 /**
  * A key with a `.` or `..` segment never reaches the wire.
@@ -30,9 +30,10 @@ final class TraversalTest extends TestCase {
 	public static function operations(): array {
 		return [
 			'delete'   => [ 'delete_object', [ 'shop', 'a/../../wp-config.php' ] ],
-			'head'     => [ 'head_object', [ 'shop', '../x.zip' ] ],
+			'rename'   => [ 'rename_object', [ 'shop', '../x.zip', 'y.zip' ] ],
+			'folder'   => [ 'create_folder', [ 'shop', 'a/../b/' ] ],
 			'exists'   => [ 'object_exists', [ 'shop', 'a/./x.zip', false ] ],
-			'copy'     => [ 'copy_object', [ 'shop', '../x.zip', 'shop', 'y.zip' ] ],
+			'upload'   => [ 'get_presigned_upload_url', [ 'shop', 'a/../x.zip' ] ],
 			'download' => [ 'get_presigned_url', [ 'shop', 'a/../x.zip' ] ],
 		];
 	}
@@ -41,15 +42,9 @@ final class TraversalTest extends TestCase {
 	public function test_a_traversal_key_sends_nothing( string $method, array $args ): void {
 		$client = new Client( Account::r2( 'abc123' ), 'key', 'secret', false );
 
-		$refused = false;
+		$result = $client->$method( ...$args );
 
-		try {
-			$refused = ! $client->$method( ...$args )->is_successful();
-		} catch ( InvalidArgumentException $exception ) {
-			$refused = true;
-		}
-
-		$this->assertTrue( $refused, $method );
+		$this->assertInstanceOf( WP_Error::class, $result, $method );
 
 		$this->assertSame( [], FakeHttp::requests(), $method );
 	}

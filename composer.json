@@ -1,6 +1,6 @@
 {
   "name": "sugarcommerce/storage",
-  "description": "Files and object storage for WordPress: S3-compatible signing and uploads, an admin bucket browser, protected upload folders with local delivery, safe paths, MIME types and filenames, streamed zips, upload inspection, and the cache, cleanup and cast helpers.",
+  "description": "Files and object storage for WordPress: S3-compatible signing, uploads and listings, an admin bucket browser, protected upload folders with local delivery, safe paths, MIME types and filenames, streamed zips, upload inspection, and the cache, cleanup and cast helpers.",
   "type": "library",
   "license": "GPL-2.0-or-later",
   "homepage": "https://github.com/sugarcommerce/storage",
@@ -11,12 +11,18 @@
     }
   ],
   "require": {
-    "php": ">=8.3"
+    "php": ">=8.3",
+    "sugarcommerce/plugin": "dev-main"
   },
-  "suggest": {
-    "ext-gd": "For Images\\Generator, which makes resized variants of an upload.",
-    "ext-exif": "So Images\\Generator can turn phone photographs the right way up."
-  },
+  "repositories": [
+    {
+      "type": "path",
+      "url": "../plugin",
+      "options": {
+        "symlink": false
+      }
+    }
+  ],
   "autoload": {
     "psr-4": {
       "SugarCommerce\\Storage\\": "src/"
@@ -50,7 +56,6 @@
     "htaccess",
     "mime-types",
     "zip",
-    "virus-scan",
     "transients"
   ],
   "require-dev": {

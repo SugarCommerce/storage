@@ -3,7 +3,8 @@ declare( strict_types=1 );
 
 namespace SugarCommerce\Storage\Tests\Browser;
 
-use SugarCommerce\Storage\Browser\Api;
+use SugarCommerce\Storage\Browser\Client;
+use SugarCommerce\Storage\S3\Method;
 use SugarCommerce\Storage\S3\Account;
 use SugarCommerce\Storage\S3\Provider as ProviderType;
 use PHPUnit\Framework\Attributes\DataProvider;
@@ -107,9 +108,9 @@ final class SigningTest extends TestCase {
 		$provider = 'r2' === $provider_class
 			? Account::r2( ...$provider_args )
 			: Account::regional( ProviderType::DigitalOcean, ...$provider_args );
-		$signer   = new Api( $provider, self::ACCESS_KEY, self::SECRET_KEY );
+		$client   = new Client( $provider, self::ACCESS_KEY, self::SECRET_KEY, false );
 
-		$url = $signer->get_presigned_url( $bucket, $key, 60 )->get_url();
+		$url  = $client->get_presigned_url( $bucket, $key, 60 );
 		$bits = $this->dissect( $url );
 
 		// The host and path must reflect the provider's addressing style.
@@ -173,8 +174,8 @@ final class SigningTest extends TestCase {
 	 */
 	public function test_auth_headers_sign_the_addressed_host(): void {
 		$spaces  = Account::regional( ProviderType::DigitalOcean, 'ams3' );
-		$signer  = new Api( $spaces, self::ACCESS_KEY, self::SECRET_KEY );
-		$headers = $signer->generate_auth_headers( 'DELETE', 'my-bucket', 'files/song.wav' );
+		$signer  = ( new Client( $spaces, self::ACCESS_KEY, self::SECRET_KEY, false ) )->signer();
+		$headers = $signer->sign( Method::DELETE, 'my-bucket', 'files/song.wav' )->headers;
 
 		$this->assertSame( 'my-bucket.ams3.digitaloceanspaces.com', $headers['host'] );
 
@@ -196,20 +197,20 @@ final class SigningTest extends TestCase {
 
 	public function test_empty_payload_hash_is_sha256_of_empty_string(): void {
 		$provider = Account::r2( 'abc123' );
-		$headers  = ( new Api( $provider, self::ACCESS_KEY, self::SECRET_KEY ) )
-			->generate_auth_headers( 'GET', 'my-bucket' );
+		$headers  = ( new Client( $provider, self::ACCESS_KEY, self::SECRET_KEY, false ) )->signer()
+			->sign( Method::GET, 'my-bucket' )->headers;
 
 		$this->assertSame( hash( 'sha256', '' ), $headers['x-amz-content-sha256'] );
 	}
 
 	public function test_presign_expiry_is_clamped_to_the_sigv4_maximum(): void {
 		$provider = Account::r2( 'abc123' );
-		$signer   = new Api( $provider, self::ACCESS_KEY, self::SECRET_KEY );
+		$client   = new Client( $provider, self::ACCESS_KEY, self::SECRET_KEY, false );
 
-		$url = $signer->get_presigned_url( 'b', 'k.txt', 99999999 )->get_url();
+		$url = $client->get_presigned_url( 'bkt', 'k.txt', 99999999 );
 		$this->assertStringContainsString( 'X-Amz-Expires=604800', $url );
 
-		$url = $signer->get_presigned_url( 'b', 'k.txt', -5 )->get_url();
+		$url = $client->get_presigned_url( 'bkt', 'k.txt', -5 );
 		$this->assertStringContainsString( 'X-Amz-Expires=60', $url );
 	}
 }

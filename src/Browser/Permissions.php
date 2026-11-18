@@ -11,16 +11,14 @@
  * and tidy.
  *
  * @package     SugarCommerce\Storage
- * @copyright   Copyright (c) 2025, ArrayPress Limited
- * @license     GPL2+
- * @author      David Sherlock
+ * @copyright   Copyright (c) 2026, ArrayPress Limited
+ * @license     GPL-2.0-or-later
  */
 
 declare( strict_types=1 );
 
 namespace SugarCommerce\Storage\Browser;
 
-use SugarCommerce\Storage\Browser\Responses\PresignedUrlResponse;
 
 /**
  * Class Permissions
@@ -87,7 +85,7 @@ class Permissions {
 		// Listing is the only probe that leaves the bucket as it found it, so
 		// it runs first and gates the rest: a token that cannot read is not
 		// going to be allowed to write.
-		$permissions['read'] = $this->client->get_objects( $bucket, 1 )->is_successful();
+		$permissions['read'] = ! is_wp_error( $this->client->get_objects( $bucket, 1, '', '/', '', false ) );
 
 		if ( $permissions['read'] && $probe_writes ) {
 			$permissions = $this->probe_writes( $bucket, $permissions );
@@ -130,9 +128,7 @@ class Permissions {
 
 		$permissions['write'] = true;
 
-		$deleted = $this->client->delete_object( $bucket, $key );
-
-		if ( $deleted->is_successful() ) {
+		if ( true === $this->client->delete_object( $bucket, $key ) ) {
 			$permissions['delete'] = true;
 
 			return $permissions;
@@ -154,34 +150,20 @@ class Permissions {
 	}
 
 	/**
-	 * Upload a small object with a presigned URL.
+	 * Write the probe object.
 	 *
 	 * @param string $bucket  Bucket name.
 	 * @param string $key     Object key.
-	 * @param string $content Body to send.
+	 * @param string $content Body.
 	 *
-	 * @return bool Whether the provider accepted it.
+	 * @return bool Whether storage took it.
 	 */
 	private function put( string $bucket, string $key, string $content ): bool {
-		$presigned = $this->client->get_presigned_upload_url( $bucket, $key, 1 );
-
-		if ( ! $presigned instanceof PresignedUrlResponse || ! $presigned->is_successful() ) {
+		try {
+			return true === $this->client->bucket( $bucket )->put( $key, $content, 'text/plain' );
+		} catch ( \InvalidArgumentException ) {
 			return false;
 		}
-
-		$response = wp_remote_request( $presigned->get_url(), [
-			'method'  => 'PUT',
-			'body'    => $content,
-			'headers' => $this->client->api()->get_base_request_headers( [ 'Content-Type' => 'text/plain' ] ),
-		] );
-
-		if ( is_wp_error( $response ) ) {
-			return false;
-		}
-
-		$status = wp_remote_retrieve_response_code( $response );
-
-		return $status >= 200 && $status < 300;
 	}
 
 	/**

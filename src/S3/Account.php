@@ -15,8 +15,7 @@ namespace SugarCommerce\Storage\S3;
 /**
  * Class Account
  *
- * Identifies which storage account requests go to, and builds the URLs the
- * transport layer sends them to.
+ * Identifies which storage account requests go to, and gives a signer for it.
  *
  * This replaces an interface, an abstract base and nine concrete subclasses.
  * Once the unreachable code was removed, what remained of each subclass was
@@ -25,11 +24,8 @@ namespace SugarCommerce\Storage\S3;
  * needs it anyway. Two copies of that table could
  * disagree; one cannot.
  *
- * URL building stays here rather than in the signer, because it is transport's
- * concern: the signer produces signatures and presigned URLs, and never sends
- * anything.
- *
- * Connection::account() builds one from a bucket somebody brought.
+ * URLs are the signer's: it signs the URL it hands back, so the two cannot
+ * disagree about how a key is encoded.
  *
  * @since 1.0.0
  */
@@ -180,62 +176,30 @@ final class Account {
 	}
 
 	/**
-	 * Build a request URL for a bucket and optional object.
+	 * A signer for this account.
 	 *
-	 * The object key is encoded here; the signature is computed over the same
-	 * encoding, so the two cannot drift.
+	 * @since 1.0.0
 	 *
-	 * @param string $bucket Bucket name.
-	 * @param string $object Optional object key.
+	 * @param string $access_key Access key id.
+	 * @param string $secret_key Secret access key.
 	 *
-	 * @return string
+	 * @return Signer
+	 *
+	 * @throws \InvalidArgumentException When a credential is empty.
 	 */
-	public function format_url( string $bucket, string $object = '' ): string {
-		return $this->build_url_with_encoded_key(
-			$bucket,
-			'' === $object ? '' : Endpoint::request_key( $object )
+	public function signer(
+		#[\SensitiveParameter]
+		string $access_key,
+		#[\SensitiveParameter]
+		string $secret_key
+	): Signer {
+		return new Signer(
+			trim( $access_key ),
+			trim( $secret_key ),
+			$this->endpoint,
+			$this->region,
+			null,
+			$this->uses_path_style() ? AddressingStyle::Path : AddressingStyle::VirtualHosted
 		);
-	}
-
-	/**
-	 * Build a request URL from an already-encoded object key.
-	 *
-	 * @param string $bucket      Bucket name.
-	 * @param string $encoded_key Encoded object key, or '' for the bucket itself.
-	 *
-	 * @return string
-	 */
-	public function build_url_with_encoded_key( string $bucket, string $encoded_key ): string {
-		$host = $this->uses_path_style()
-			? $this->endpoint . '/' . rawurlencode( $bucket )
-			: $bucket . '.' . $this->endpoint;
-
-		return 'https://' . $host . ( '' === $encoded_key ? '' : '/' . $encoded_key );
-	}
-
-	/**
-	 * Build a request URL with query parameters.
-	 *
-	 * PHP_QUERY_RFC3986 is required, not cosmetic: the signature is computed
-	 * over RFC 3986 encoding, and http_build_query()'s default renders a space
-	 * as '+' and a tilde as '%7E'. A prefix or continuation token containing
-	 * either would be signed one way and sent another.
-	 *
-	 * @param string $bucket       Bucket name, or '' for service-level requests.
-	 * @param string $object       Optional object key.
-	 * @param array  $query_params Query parameters.
-	 *
-	 * @return string
-	 */
-	public function build_url_with_query( string $bucket = '', string $object = '', array $query_params = [] ): string {
-		$url = '' === $bucket
-			? 'https://' . $this->endpoint
-			: $this->format_url( $bucket, $object );
-
-		if ( ! empty( $query_params ) ) {
-			$url .= '?' . http_build_query( $query_params, '', '&', PHP_QUERY_RFC3986 );
-		}
-
-		return $url;
 	}
 }

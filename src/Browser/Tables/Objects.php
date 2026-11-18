@@ -21,6 +21,7 @@ use WP_Error;
 use WP_List_Table;
 use SugarCommerce\Storage\Browser\Admin\Icon;
 use SugarCommerce\Storage\Browser\Client;
+use SugarCommerce\Storage\Browser\Utils\Directory;
 
 /**
  * Class Objects
@@ -145,7 +146,7 @@ class Objects extends WP_List_Table {
 			? sanitize_text_field( wp_unslash( $_REQUEST['continuation_token'] ) )
 			: '';
 
-		$result = $this->client->get_object_models(
+		$result = $this->client->get_objects(
 			$this->bucket,
 			$this->per_page,
 			$this->prefix,
@@ -153,9 +154,7 @@ class Objects extends WP_List_Table {
 			$continuation_token
 		);
 
-		$this->api_result = $result->is_successful()
-			? $result->get_data()
-			: new WP_Error( $result->get_error_code(), $result->get_error_message() );
+		$this->api_result = $result;
 
 		return $this->api_result;
 	}
@@ -185,8 +184,8 @@ class Objects extends WP_List_Table {
 		foreach ( $prefixes as $folder ) {
 			$items[] = [
 				'type'     => 'folder',
-				'name'     => $folder->get_folder_name(),
-				'prefix'   => $folder->get_prefix(),
+				'name'     => Directory::name( $folder ),
+				'prefix'   => $folder,
 				'size'     => '-',
 				'modified' => '-',
 				'mime'     => 'folder',

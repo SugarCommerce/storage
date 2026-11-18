@@ -1,35 +1,36 @@
 <?php
 /**
- * Context Trait - Enhanced with Tab ID Methods
+ * Context Trait
  *
- * Provides context management and consistent ID generation for tabs, hooks, and actions.
- *
- * @package     SugarCommerce\Storage\Browser\Traits\Shared
- * @copyright   Copyright (c) 2025, ArrayPress Limited
- * @license     GPL2+
- * @version     1.0.0
- * @author      David Sherlock
+ * @package     SugarCommerce\Storage
+ * @copyright   Copyright (c) 2026, ArrayPress Limited
+ * @license     GPL-2.0-or-later
+ * @since       1.0.0
  */
 
 declare( strict_types=1 );
 
 namespace SugarCommerce\Storage\Browser\Traits\Shared;
 
-use SugarCommerce\Storage\Utils\Runtime;
-
+/**
+ * Trait Context
+ *
+ * Which integration an instance serves -- 'edd', 'woocommerce' -- so two on
+ * one site keep their own caches and upload rules.
+ */
 trait Context {
 
 	/**
-	 * Context identifier for this client instance
+	 * The context, or null.
 	 *
 	 * @var string|null
 	 */
 	private ?string $context = null;
 
 	/**
-	 * Set the context for this client
+	 * Set the context.
 	 *
-	 * @param string|null $context Context identifier (e.g., 'edd_plugin', 'woocommerce', etc.)
+	 * @param string|null $context Context identifier.
 	 *
 	 * @return self
 	 */
@@ -40,47 +41,20 @@ trait Context {
 	}
 
 	/**
-	 * Get the current context
+	 * The context, or null.
 	 *
-	 * @return string|null Current context or null if not set
+	 * @return string|null
 	 */
 	public function get_context(): ?string {
 		return $this->context;
 	}
 
 	/**
-	 * Check if any context is set
+	 * Whether there is one.
 	 *
-	 * @return bool Whether a context is currently set
+	 * @return bool
 	 */
 	public function has_context(): bool {
-		return $this->context !== null;
-	}
-
-	/**
-	 * Apply multiple filters with context support
-	 *
-	 * This allows applying both a general filter and a context-specific filter
-	 *
-	 * @param string $base_filter_name Base filter name (without context)
-	 * @param mixed  $value            Value to filter
-	 * @param mixed  ...$args          Additional arguments for the filter
-	 *
-	 * @return mixed Filtered value
-	 */
-	protected function apply_contextual_filters( string $base_filter_name, $value, ...$args ) {
-		// Add context as the last parameter
-		$args[] = $this->context;
-
-		// Apply the general filter first
-		$value = apply_filters( Runtime::hook( $base_filter_name ), $value, ...$args );
-
-		// If we have a context, also apply the context-specific filter
-		if ( $this->has_context() ) {
-			$contextual_filter_name = $base_filter_name . '_' . $this->context;
-			$value                  = apply_filters( Runtime::hook( $contextual_filter_name ), $value, ...$args );
-		}
-
-		return $value;
+		return null !== $this->context;
 	}
 }

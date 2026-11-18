@@ -324,4 +324,19 @@ final class StorageTest extends TestCase {
 		$this->assertSame( 'fresh', Cache::remember( 'shared', static fn(): string => 'fresh' ) );
 		$this->assertTrue( Cache::has( 'shared' ) );
 	}
+
+	/**
+	 * get() and set() read and write the same wrapper remember() does, so a
+	 * kept false is false and nothing kept is the default.
+	 */
+	public function test_get_and_set_tell_a_kept_false_from_nothing(): void {
+		$this->assertSame( 'none', Cache::get( 'k', 'none' ) );
+
+		$this->assertTrue( Cache::set( 'k', false ) );
+		$this->assertFalse( Cache::get( 'k', 'none' ) );
+		$this->assertFalse( Cache::remember( 'k', static fn(): string => 'recomputed' ) );
+
+		set_transient( 'raw', 'not wrapped' );
+		$this->assertSame( 'none', Cache::get( 'raw', 'none' ), 'A value somebody else wrote is not ours.' );
+	}
 }

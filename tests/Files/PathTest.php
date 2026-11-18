@@ -206,4 +206,40 @@ final class PathTest extends TestCase {
 	public function test_a_missing_directory_refuses_everything(): void {
 		$this->assertNull( Path::within( $this->root . '/nowhere', 'manual.pdf' ) );
 	}
+
+	/* --- to_url ----------------------------------------------------------- */
+
+	/**
+	 * Uploads come first, from wp_upload_dir(): they can live outside the
+	 * content folder, at a URL nothing else knows.
+	 */
+	public function test_an_upload_outside_the_content_folder_keeps_its_own_url(): void {
+		wp_test_reset();
+
+		$this->assertSame(
+			'https://example.test/wp-content/uploads/2026/11/a b.zip',
+			Path::to_url( $GLOBALS['wp_test_uploads'] . '/2026/11/a b.zip' )
+		);
+	}
+
+	/**
+	 * A folder that merely starts with the uploads folder's name is not in it.
+	 */
+	public function test_a_sibling_of_the_uploads_folder_is_not_an_upload(): void {
+		wp_test_reset();
+
+		$this->assertNull( Path::to_url( $GLOBALS['wp_test_uploads'] . '-old/a.zip' ) );
+	}
+
+	/**
+	 * Everything else is Plugin\Assets': the content folder, then the root.
+	 */
+	public function test_anything_else_is_mapped_by_plugin_assets(): void {
+		wp_test_reset();
+
+		$this->assertSame( 'https://example.test/wp-content/plugins/x/a.css', Path::to_url( WP_CONTENT_DIR . '/plugins/x/a.css' ) );
+		$this->assertSame( 'https://example.test/readme.html', Path::to_url( ABSPATH . 'readme.html' ) );
+		$this->assertNull( Path::to_url( '/somewhere/else/a.css' ) );
+		$this->assertNull( Path::to_url( '' ) );
+	}
 }

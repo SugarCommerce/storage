@@ -124,16 +124,18 @@ final class Filename {
 	/**
 	 * The last segment of a path, whichever separator was used.
 	 *
-	 * Windows separators are converted first, because `basename()` only
-	 * understands the host's -- so on Linux a name of
-	 * `..\..\windows\system32\evil.exe` comes back whole.
+	 * Core's wp_basename(), which splits on both separators -- PHP's
+	 * basename() only understands the host's, so on Linux a name of
+	 * `..\..\windows\system32\evil.exe` came back whole -- and, unlike
+	 * basename(), does not depend on the locale to keep a multibyte name
+	 * intact.
 	 *
 	 * @param string $path A filename, an object key or a path.
 	 *
 	 * @return string
 	 */
 	public static function basename( string $path ): string {
-		return basename( str_replace( '\\', '/', $path ) );
+		return wp_basename( $path );
 	}
 
 	/**
@@ -278,6 +280,54 @@ final class Filename {
 		$base = (string) preg_replace( self::RESERVED, '$1_', $base );
 
 		return rtrim( mb_substr( $base, 0, max( 1, $max - mb_strlen( $suffix ) ) ), ' .' ) . $suffix;
+	}
+
+	/**
+	 * What is wrong with a name typed for an existing file, or '' when nothing is.
+	 *
+	 * The rules a rename is held to, so the name works as a key and as a file
+	 * somebody downloads: one segment (no `/`, `\` or `..`), at most 255
+	 * bytes, none of `< > : " | ? *` or a control character, not starting
+	 * with a dot, dash, underscore or space or ending with a dot or space,
+	 * and not a name Windows reserves (`CON`, `COM1.wav`). Unlike refusal(),
+	 * it says nothing about the type.
+	 *
+	 * The reasons are translated, so they can be shown to whoever typed it.
+	 *
+	 * @param string $filename The name as typed.
+	 *
+	 * @return string
+	 */
+	public static function problem( string $filename ): string {
+		if ( '' === trim( $filename ) ) {
+			return __( 'Filename cannot be empty', 'sugarcommerce' );
+		}
+
+		if ( strlen( $filename ) > 255 ) {
+			return __( 'Filename is too long (maximum 255 characters)', 'sugarcommerce' );
+		}
+
+		if ( 1 === preg_match( '/[<>:"|?*]/', $filename ) ) {
+			return __( 'Filename contains invalid characters: < > : " | ? *', 'sugarcommerce' );
+		}
+
+		if ( 1 === preg_match( '/^[.\-_\s]|[.\s]$/', $filename ) ) {
+			return __( 'Filename cannot start with dots, dashes, underscores, or spaces, or end with dots or spaces', 'sugarcommerce' );
+		}
+
+		if ( str_contains( $filename, '..' ) || str_contains( $filename, '/' ) || str_contains( $filename, '\\' ) ) {
+			return __( 'Filename cannot contain path separators or relative path indicators', 'sugarcommerce' );
+		}
+
+		if ( 1 === preg_match( '/[\x00-\x1F\x7F]/', $filename ) ) {
+			return __( 'Filename cannot contain control characters', 'sugarcommerce' );
+		}
+
+		if ( 1 === preg_match( self::RESERVED, $filename ) ) {
+			return __( 'Filename cannot be a reserved system name', 'sugarcommerce' );
+		}
+
+		return '';
 	}
 
 	/**

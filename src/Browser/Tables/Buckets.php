@@ -70,43 +70,33 @@ class Buckets extends WP_List_Table {
 	public function prepare_items() {
 		$this->_column_headers = [ $this->get_columns(), [], [] ];
 
-		$marker = isset( $_GET['marker'] ) ? sanitize_text_field( wp_unslash( $_GET['marker'] ) ) : '';
+		$result = $this->client->get_buckets( true );
 
-		// Get buckets (1000 is the maximum)
-		$result = $this->client->get_bucket_models( 1000, '', $marker, true );
-
-		if ( ! $result->is_successful() ) {
+		if ( is_wp_error( $result ) ) {
 			echo '<div class="notice notice-error"><p>' . esc_html( $result->get_error_message() ) . '</p></div>';
 			$this->items = [];
 
 			return;
 		}
 
-		$data    = $result->get_data();
-		$buckets = $data['buckets'];
-		$items   = [];
+		$items = [];
 
-		foreach ( $buckets as $bucket ) {
+		foreach ( $result['buckets'] as $bucket ) {
 			$items[] = [
-				'name'    => $bucket->get_name(),
-				'created' => $bucket->get_creation_date( true, 'M j, Y g:i A' ),
-				'raw'     => $bucket,
+				'name'    => $bucket['name'],
+				'created' => '' === $bucket['created'] ? '' : (string) wp_date( 'M j, Y g:i A', (int) strtotime( $bucket['created'] ) ),
+				'raw'     => $bucket['created'],
 			];
 		}
 
 		$this->items = $items;
 
-		// Store pagination info
+		// ListBuckets answers with every bucket at once.
 		$this->set_pagination_args( [
 			'total_items' => count( $items ),
-			'per_page'    => 1000,
-			'total_pages' => $data['truncated'] ? 2 : 1,
+			'per_page'    => max( 1, count( $items ) ),
+			'total_pages' => 1,
 		] );
-
-		// Store the marker for next page link
-		if ( $data['truncated'] && ! empty( $data['next_marker'] ) ) {
-			$this->_pagination_args['marker'] = $data['next_marker'];
-		}
 	}
 
 	/**
@@ -137,9 +127,8 @@ class Buckets extends WP_List_Table {
 	 * Column created - Display formatted creation date with relative time
 	 */
 	public function column_created( $item ) {
-		$bucket         = $item['raw']; // Get the S3Bucket model object
 		$formatted_date = $item['created']; // Already formatted in prepare_items
-		$raw_date       = $bucket->get_creation_date(); // Get raw timestamp
+		$raw_date       = $item['raw']; // As storage gave it
 
 		// Add relative time if we have a valid date
 		$relative_time = '';

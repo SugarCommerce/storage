@@ -82,4 +82,34 @@ final class FilenameTest extends TestCase {
 		$this->assertSame( 'jpg', Filename::extension( '/uploads/2026/holiday.jpg?v=2' ) );
 		$this->assertSame( '', Filename::extension( 'no-extension' ) );
 	}
+
+	/**
+	 * The name a file is renamed to: one segment, safe on every system.
+	 *
+	 * @return array<string, array{0: string, 1: string}>
+	 */
+	public static function typed_names(): array {
+		return [
+			'plain'                 => [ 'Mix (final) #2.wav', '' ],
+			'unicode'               => [ 'Déjà vu.wav', '' ],
+			'empty'                 => [ '   ', 'Filename cannot be empty' ],
+			'too long'              => [ str_repeat( 'a', 252 ) . '.wav', 'Filename is too long (maximum 255 characters)' ],
+			'a slash'               => [ 'a/b.wav', 'Filename cannot contain path separators or relative path indicators' ],
+			'a backslash'           => [ 'a\\b.wav', 'Filename cannot contain path separators or relative path indicators' ],
+			'two dots'              => [ 'a..b.wav', 'Filename cannot contain path separators or relative path indicators' ],
+			'a colon'               => [ 'a:b.wav', 'Filename contains invalid characters: < > : " | ? *' ],
+			'a leading dot'         => [ '.env', 'Filename cannot start with dots, dashes, underscores, or spaces, or end with dots or spaces' ],
+			'a trailing space'      => [ 'a.wav ', 'Filename cannot start with dots, dashes, underscores, or spaces, or end with dots or spaces' ],
+			'a control character'   => [ "a\x01.wav", 'Filename cannot contain control characters' ],
+			'a reserved name'       => [ 'CON.wav', 'Filename cannot be a reserved system name' ],
+			'reserved, any case'    => [ 'lpt1', 'Filename cannot be a reserved system name' ],
+			'reserved, two exts'    => [ 'aux.tar.gz', 'Filename cannot be a reserved system name' ],
+			'only starts reserved'  => [ 'CONSOLE.wav', '' ],
+		];
+	}
+
+	#[\PHPUnit\Framework\Attributes\DataProvider( 'typed_names' )]
+	public function test_a_typed_name_is_checked( string $name, string $problem ): void {
+		$this->assertSame( $problem, Filename::problem( $name ) );
+	}
 }
