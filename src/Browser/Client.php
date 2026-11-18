@@ -500,6 +500,14 @@ class Client {
 	 * Folder markers, empty files and hidden files (`.DS_Store` and the like;
 	 * see the `s3_object_hidden_files` filter) are left out of `objects`.
 	 *
+	 * A page that was listed goes through the `s3_get_objects_response`
+	 * filter (and its `_{context}` form) with the bucket, prefix, max keys and
+	 * context -- the old `arraypress_s3_get_objects_response`. Listing a
+	 * bucket is the moment every browser route has in common, so an
+	 * integration that has to act on a bucket being browsed hooks it:
+	 * WooCommerce approving the bucket as a download directory. A filter
+	 * returns the page it was given, or another of the same shape.
+	 *
 	 * @param string $bucket             Bucket name.
 	 * @param int    $max_keys           Keys a page, 1 to 1000.
 	 * @param string $prefix             Only keys under this.
@@ -533,12 +541,21 @@ class Client {
 			}
 		}
 
-		return [
+		$result = [
 			'objects'            => $objects,
 			'prefixes'           => array_map( static fn( string $folder ): string => rtrim( $folder, '/' ) . '/', $page['prefixes'] ),
 			'truncated'          => $page['truncated'],
 			'continuation_token' => $page['next_token'],
 		];
+
+		$args  = [ $bucket, $prefix, $max_keys, $this->get_context() ];
+		$value = apply_filters( Runtime::hook( 's3_get_objects_response' ), $result, ...$args );
+
+		if ( $this->has_context() ) {
+			$value = apply_filters( Runtime::hook( 's3_get_objects_response_' . $this->get_context() ), $value, ...$args );
+		}
+
+		return is_array( $value ) || is_wp_error( $value ) ? $value : $result;
 	}
 
 	/**
