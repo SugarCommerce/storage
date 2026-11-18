@@ -41,7 +41,8 @@ if ( ! defined( 'ABSPATH' ) ) {
 		. "\t\tpublic \$items = [];\n"
 		. "\t\tprotected \$_pagination_args = [];\n"
 		. "\t\tprotected \$_column_headers = [];\n"
-		. "\t\tpublic function __construct( \$args = [] ) {}\n"
+		. "\t\tpublic \$screen;\n"
+		. "\t\tpublic function __construct( \$args = [] ) { \$this->screen = convert_to_screen( \$args['screen'] ?? '' ); }\n"
 		. "\t\tpublic function set_pagination_args( \$args ) { \$this->_pagination_args = \$args; }\n"
 		. "\t\tpublic function row_actions( \$actions, \$always_visible = false ) { return ''; }\n"
 		. "\t\tpublic function get_pagenum() { return 1; }\n"
@@ -50,6 +51,15 @@ if ( ! defined( 'ABSPATH' ) ) {
 		. "\t\tpublic function prepare_items() {}\n"
 		. "\t}\n}\n"
 	);
+
+	// As core: the constructor above asks convert_to_screen(), which is in
+	// template.php -- an admin include a REST request does not load.
+	file_put_contents(
+		$wp_stub_root . 'wp-admin/includes/template.php',
+		"<?php\nfunction convert_to_screen( \$hook_name ) { return (object) [ 'id' => (string) \$hook_name ]; }\n"
+	);
+	file_put_contents( $wp_stub_root . 'wp-admin/includes/class-wp-screen.php', "<?php\n" );
+	file_put_contents( $wp_stub_root . 'wp-admin/includes/screen.php', "<?php\n" );
 
 	define( 'ABSPATH', $wp_stub_root );
 }

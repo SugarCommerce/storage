@@ -94,6 +94,8 @@ class Objects extends WP_List_Table {
 	 *                           }
 	 */
 	public function __construct( array $args = [] ) {
+		self::load_admin_includes();
+
 		parent::__construct( [
 			'singular' => 'object',
 			'plural'   => 'objects',
@@ -106,6 +108,25 @@ class Objects extends WP_List_Table {
 		$this->prefix      = $args['prefix'] ?? '';
 		$this->provider_id = $args['provider_id'];
 		$this->per_page    = $args['per_page'] ?? 1000;
+	}
+
+	/**
+	 * Load the admin functions WP_List_Table's constructor calls.
+	 *
+	 * The table is also built over REST, for "Load more", where wp-admin's
+	 * includes are not loaded: the constructor's convert_to_screen() is in
+	 * template.php, and the screen it makes is WP_Screen's.
+	 *
+	 * @return void
+	 */
+	private static function load_admin_includes(): void {
+		if ( function_exists( 'convert_to_screen' ) ) {
+			return;
+		}
+
+		require_once ABSPATH . 'wp-admin/includes/class-wp-screen.php';
+		require_once ABSPATH . 'wp-admin/includes/screen.php';
+		require_once ABSPATH . 'wp-admin/includes/template.php';
 	}
 
 	/**
