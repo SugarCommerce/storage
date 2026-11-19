@@ -142,14 +142,15 @@ class Client {
 	 *
 	 * Two plugins each shipping their own Strauss-prefixed copy must not
 	 * address the same transients. The root namespace differs per build
-	 * (WCR2\, EDDR2\); $context separates several clients in one plugin.
+	 * ({@see Runtime::build()}); $context separates several clients in one plugin.
 	 *
 	 * @param string|null $context Optional context identifier.
 	 *
 	 * @return string
 	 */
 	private static function cache_prefix( ?string $context ): string {
-		$parts = [ Sanitize::slug( (string) strtok( __NAMESPACE__, '\\' ) ), 's3' ];
+		$build = Runtime::build();
+		$parts = [ '' === $build ? 'sugarcommerce' : $build, 's3' ];
 
 		if ( null !== $context && '' !== $context ) {
 			$parts[] = Sanitize::slug( $context );

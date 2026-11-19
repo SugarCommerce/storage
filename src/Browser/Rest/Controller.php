@@ -115,10 +115,9 @@ class Controller {
 	 * allow-list.
 	 *
 	 * The default derivation exploits the very thing Strauss *does* rewrite:
-	 * this file's namespace. In a prefixed build __NAMESPACE__ starts with the
-	 * consumer's prefix ("EDDR2\SugarCommerce\Storage\Browser\..."), which is unique per
-	 * plugin by construction, so the namespace comes out distinct with no
-	 * configuration required.
+	 * the package's namespace, which in a prefixed build names the consumer
+	 * ({@see Runtime::build()}) and so is unique per plugin by construction,
+	 * with no configuration required.
 	 *
 	 * @return string
 	 */
@@ -127,16 +126,11 @@ class Controller {
 			return $this->rest_namespace;
 		}
 
-		$segments = explode( '\\', __NAMESPACE__ );
-		$prefix   = $segments[0] ?? '';
+		// Unprefixed (plain Composer install, or development) there is no
+		// build name, and the routes are the library's own.
+		$build = Runtime::build();
 
-		// Unprefixed (plain Composer install, or development) leaves the
-		// library's own vendor name at the front.
-		$base = ( '' === $prefix || 'SugarCommerce' === $prefix )
-			? 's3-browser'
-			: Sanitize::slug( $prefix ) . '-s3-browser';
-
-		return trim( $base, '-' ) . '/v1';
+		return ( '' === $build ? 's3-browser' : $build . '-s3-browser' ) . '/v1';
 	}
 
 	/**
