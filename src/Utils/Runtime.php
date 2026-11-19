@@ -12,6 +12,8 @@ declare( strict_types=1 );
 
 namespace SugarCommerce\Storage\Utils;
 
+use SugarCommerce\Plugin\Build;
+
 /**
  * Every runtime string this package registers, derived from its own namespace.
  *
@@ -104,24 +106,7 @@ final class Runtime {
 	 * @return string
 	 */
 	public static function build_for( string $under ): string {
-		$under = array_values( array_filter( explode( '\\', $under ), 'strlen' ) );
-
-		// Everything in front of this class's own segments after the vendor
-		// one ("…\Utils" and the package segment before it).
-		$segments = array_slice( $under, 0, -( self::OWN_SEGMENTS - 1 ) );
-		$last     = end( $segments );
-
-		if ( 'SugarCommerce' === $last ) {
-			array_pop( $segments );
-
-			if ( [] !== $segments && 'SugarCommerce' !== $segments[0] ) {
-				$segments = [ $segments[0] ];
-			}
-		} elseif ( 'Lib' === $last ) {
-			array_pop( $segments );
-		}
-
-		return strtolower( trim( (string) preg_replace( '/[^A-Za-z0-9]+/', '-', implode( '-', $segments ) ), '-' ) );
+		return Build::name( $under, self::OWN_SEGMENTS );
 	}
 
 	/**
