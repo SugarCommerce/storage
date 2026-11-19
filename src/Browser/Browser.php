@@ -15,6 +15,7 @@ namespace SugarCommerce\Storage\Browser;
 
 use SugarCommerce\Storage\Utils\Runtime;
 use SugarCommerce\Storage\S3\Account;
+use SugarCommerce\Storage\S3\Multipart;
 use SugarCommerce\Storage\Browser\Admin\Assets;
 use SugarCommerce\Storage\Browser\Admin\Config;
 use SugarCommerce\Storage\Browser\Admin\MediaLibrary;
@@ -167,7 +168,8 @@ class Browser {
 			// A closure rather than the resolved array: get_allowed_buckets()
 			// runs through a filter, and set_allowed_buckets() may be called
 			// after construction, so the controller has to ask each time.
-			fn(): array => $this->get_allowed_buckets()
+			fn(): array => $this->get_allowed_buckets(),
+			$default_bucket
 		);
 
 		$this->screen    = new Screen( $this->config );
@@ -196,6 +198,11 @@ class Browser {
 		// not fire admin_footer.
 		add_action( 'admin_footer', [ $this->templates, 'print_templates' ] );
 		add_action( 'admin_print_footer_scripts', [ $this->templates, 'print_templates' ] );
+
+		// Unfinished large uploads keep their parts, billed, until somebody
+		// aborts them. Once a day, in the admin, where the cron entry is made.
+		add_action( $this->get_prune_hook(), [ $this, 'prune_uploads' ] );
+		add_action( 'admin_init', [ $this, 'schedule_prune' ] );
 
 		// If rest_api_init has already fired, adding a callback to it now would
 		// never run. That happens whenever a consumer builds the Browser late --
@@ -379,5 +386,79 @@ class Browser {
 	 */
 	public function get_provider_id(): string {
 		return $this->config->provider_id;
+	}
+
+	/**
+	 * The cron hook that clears this browser's abandoned uploads
+	 *
+	 * Named from the build and the instance, so two plugins -- or two
+	 * browsers in one -- each clear their own buckets.
+	 *
+	 * @return string
+	 */
+	public function get_prune_hook(): string {
+		return self::prune_hook( $this->config->hook_suffix() );
+	}
+
+	/**
+	 * The cron hook for a browser instance, from its hook suffix
+	 *
+	 * For a plugin's deactivation or uninstall, which has no browser to ask:
+	 * `wp_clear_scheduled_hook( Browser::prune_hook( 'r2_myshop' ) )`.
+	 *
+	 * @param string $hook_suffix What get_hook_suffix() answers.
+	 *
+	 * @return string
+	 */
+	public static function prune_hook( string $hook_suffix ): string {
+		return Runtime::hook( 's3_prune_uploads_' . sanitize_key( $hook_suffix ) );
+	}
+
+	/**
+	 * Put the daily clear-up in the calendar, once
+	 *
+	 * @return void
+	 */
+	public function schedule_prune(): void {
+		if ( false === wp_next_scheduled( $this->get_prune_hook() ) ) {
+			wp_schedule_event( time() + HOUR_IN_SECONDS, 'daily', $this->get_prune_hook() );
+		}
+	}
+
+	/**
+	 * Take the daily clear-up out of the calendar
+	 *
+	 * @return void
+	 */
+	public function unschedule_prune(): void {
+		wp_clear_scheduled_hook( $this->get_prune_hook() );
+	}
+
+	/**
+	 * Abort the unfinished uploads in this browser's buckets that are older
+	 * than a week, and forget them
+	 *
+	 * The buckets are the ones it is confined to, or the one it opens on.
+	 * The age is filterable through `s3_upload_prune_days`.
+	 *
+	 * @return array<string, array{aborted: int, failed: int, forgotten: int}|\WP_Error> Bucket => what happened.
+	 */
+	public function prune_uploads(): array {
+		/**
+		 * Filter the days an unfinished upload may sit before it is aborted.
+		 *
+		 * @param int    $days        Days. Default 7, as R2 does by itself.
+		 * @param string $provider_id Provider identifier.
+		 * @param string $context     Browser context.
+		 */
+		$days    = max( 1, (int) apply_filters( Runtime::hook( 's3_upload_prune_days' ), 7, $this->config->provider_id, $this->config->context ) );
+		$buckets = $this->get_allowed_buckets() ?: array_filter( [ $this->config->default_bucket ] );
+		$results = [];
+
+		foreach ( array_unique( $buckets ) as $bucket ) {
+			$results[ $bucket ] = ( new Multipart( $this->client->bucket( (string) $bucket ) ) )->prune( $days );
+		}
+
+		return $results;
 	}
 }

@@ -22,7 +22,12 @@ declare( strict_types=1 );
 namespace SugarCommerce\Storage\Browser\Rest;
 
 use SugarCommerce\Storage\Utils\Runtime;
+use SugarCommerce\Storage\S3\Bucket;
+use SugarCommerce\Storage\S3\Multipart;
+use SugarCommerce\Storage\S3\Probe;
+use SugarCommerce\Storage\S3\ProbeStep;
 use SugarCommerce\Storage\S3\Transport;
+use SugarCommerce\Storage\S3\Upload;
 use SugarCommerce\Storage\Browser\Client;
 use SugarCommerce\Storage\S3\Cors\Origin;
 use SugarCommerce\Storage\Browser\Tables\Objects;
@@ -50,6 +55,7 @@ class Controller {
 	 * @param string  $capability      Capability required to call any route.
 	 * @param string  $route_base      Segment identifying this instance's routes.
 	 * @param Closure $allowed_buckets Resolver for the bucket allow-list.
+	 * @param string  $default_bucket  Bucket the browser opens on, or ''.
 	 */
 	public function __construct(
 		private Client $client,
@@ -59,9 +65,24 @@ class Controller {
 		// Resolved per request rather than captured once: the allow-list runs
 		// through a filter, so an integration can scope it by user or context
 		// and that has to be honoured at call time, not at registration time.
-		private Closure $allowed_buckets
+		private Closure $allowed_buckets,
+		// The bucket the browser opens on, which the connection test checks
+		// when no fallback bucket is filtered in.
+		private string $default_bucket = ''
 	) {
 	}
+
+	/**
+	 * Most part URLs one request may ask for: enough to keep a browser busy
+	 * for a while, few enough that a URL is not left waiting long enough to
+	 * expire.
+	 */
+	public const PARTS_PER_SIGNING = 100;
+
+	/**
+	 * Seconds a part URL works for.
+	 */
+	private const PART_URL_SECONDS = 3600;
 
 	/**
 	 * Explicit REST namespace override, if the consumer set one.
@@ -210,6 +231,100 @@ class Controller {
 				'methods'             => 'GET',
 				'callback'            => [ $this, 'rest_connection_test' ],
 				'permission_callback' => [ $this, 'rest_permission_check' ],
+			],
+		] );
+
+		// --- Connection test, in full, for one bucket -------------------------
+		register_rest_route( $namespace, '/' . $base . '/connection/check', [
+			[
+				'methods'             => 'GET',
+				'callback'            => [ $this, 'rest_connection_check' ],
+				'permission_callback' => [ $this, 'rest_bucket_permission_check' ],
+				'args'                => $bucket_arg,
+			],
+		] );
+
+		// --- Large uploads, in parts -----------------------------------------
+		$upload_arg = [
+			'id' => [
+				'description' => __( 'Upload id.', 'sugarcommerce' ),
+				'type'        => 'string',
+				'required'    => true,
+				'pattern'     => '^[a-f0-9]{32}$',
+			],
+		];
+
+		register_rest_route( $namespace, '/' . $base . '/buckets/(?P<bucket>[^/]+)/uploads', [
+			[
+				'methods'             => 'POST',
+				'callback'            => [ $this, 'rest_start_upload' ],
+				'permission_callback' => [ $this, 'rest_bucket_permission_check' ],
+				'args'                => $bucket_arg + $object_key_arg + [
+					'size'        => [
+						'description' => __( 'Bytes in the file.', 'sugarcommerce' ),
+						'type'        => 'integer',
+						'required'    => true,
+						'minimum'     => 1,
+					],
+					'mime_type'   => [
+						'type'              => 'string',
+						'default'           => 'application/octet-stream',
+						'sanitize_callback' => 'sanitize_mime_type',
+					],
+					'fingerprint' => [
+						'description'       => __( 'What identifies the file to the browser, so the same file dropped again resumes.', 'sugarcommerce' ),
+						'type'              => 'string',
+						'default'           => '',
+						'maxLength'         => 255,
+						'sanitize_callback' => [ $this, 'rest_sanitize_object_key' ],
+					],
+				],
+			],
+		] );
+
+		register_rest_route( $namespace, '/' . $base . '/buckets/(?P<bucket>[^/]+)/uploads/(?P<id>[a-f0-9]{32})', [
+			[
+				'methods'             => 'GET',
+				'callback'            => [ $this, 'rest_upload_status' ],
+				'permission_callback' => [ $this, 'rest_bucket_permission_check' ],
+				'args'                => $bucket_arg + $upload_arg,
+			],
+			[
+				'methods'             => 'DELETE',
+				'callback'            => [ $this, 'rest_abort_upload' ],
+				'permission_callback' => [ $this, 'rest_bucket_permission_check' ],
+				'args'                => $bucket_arg + $upload_arg,
+			],
+		] );
+
+		register_rest_route( $namespace, '/' . $base . '/buckets/(?P<bucket>[^/]+)/uploads/(?P<id>[a-f0-9]{32})/parts', [
+			[
+				'methods'             => 'POST',
+				'callback'            => [ $this, 'rest_sign_upload_parts' ],
+				'permission_callback' => [ $this, 'rest_bucket_permission_check' ],
+				'args'                => $bucket_arg + $upload_arg + [
+					'parts' => [
+						'description' => __( 'Part numbers to sign.', 'sugarcommerce' ),
+						'type'        => 'array',
+						'required'    => true,
+						'minItems'    => 1,
+						'maxItems'    => self::PARTS_PER_SIGNING,
+						'items'       => [
+							'type'    => 'integer',
+							'minimum' => 1,
+							'maximum' => Bucket::MAX_PARTS,
+						],
+					],
+				],
+			],
+		] );
+
+		register_rest_route( $namespace, '/' . $base . '/buckets/(?P<bucket>[^/]+)/uploads/(?P<id>[a-f0-9]{32})/complete', [
+			[
+				'methods'             => 'POST',
+				'callback'            => [ $this, 'rest_complete_upload' ],
+				'permission_callback' => [ $this, 'rest_bucket_permission_check' ],
+				'args'                => $bucket_arg + $upload_arg,
 			],
 		] );
 
@@ -586,6 +701,82 @@ class Controller {
 	 * @return WP_REST_Response|WP_Error
 	 */
 	public function rest_connection_test() {
+		$answer = $this->connection_answer();
+		$data   = $answer->get_data();
+
+		// The bucket the full check (connection/check) should try next, for
+		// a script that shows each step.
+		if ( is_array( $data ) && 'failed' !== ( $data['status'] ?? '' ) ) {
+			$bucket = $this->check_bucket();
+
+			if ( '' !== $bucket ) {
+				$data['check_bucket'] = $bucket;
+				$answer               = $this->rest_ok( $data );
+			}
+		}
+
+		return $answer;
+	}
+
+	/**
+	 * Run the whole connection test against one bucket
+	 *
+	 * What a store will do with real files, done with a tiny one: list,
+	 * write, read back, delete, start and abort a multipart upload, and ask
+	 * whether a browser on this site may upload straight to the bucket. Each
+	 * step comes back with what went wrong and what to change.
+	 *
+	 * @param WP_REST_Request $request Request.
+	 *
+	 * @return WP_REST_Response
+	 */
+	public function rest_connection_check( WP_REST_Request $request ): WP_REST_Response {
+		$bucket = (string) $request['bucket'];
+		$origin = Origin::current();
+		$steps  = ( new Probe() )->run( $this->client->bucket( $bucket ), '' === $origin ? [] : [ $origin ] );
+		$failed = Probe::failure( $steps );
+		$notes  = array_values( array_filter( array_map( static fn( ProbeStep $step ): string => $step->note, $steps ) ) );
+
+		$this->client->cache()->flush_bucket( $bucket );
+
+		return $this->rest_ok( [
+			'status'  => null === $failed ? 'ok' : 'failed',
+			'bucket'  => $bucket,
+			'message' => null === $failed
+				/* translators: %s: bucket name */
+				? sprintf( __( '"%s" passed every check.', 'sugarcommerce' ), $bucket )
+				: __( 'The connection test found a problem.', 'sugarcommerce' ),
+			'summary' => null === $failed ? '' : $failed->message,
+			'notes'   => $notes,
+			'checks'  => array_map( static fn( ProbeStep $step ): array => $step->to_array(), $steps ),
+		] );
+	}
+
+	/**
+	 * The bucket the full connection check tries
+	 *
+	 * The fallback bucket a consumer filters in, else the bucket the browser
+	 * opens on, else the one bucket it is confined to.
+	 *
+	 * @return string '' when there is none to try.
+	 */
+	private function check_bucket(): string {
+		$bucket = (string) apply_filters( Runtime::hook( 's3_connection_test_fallback_bucket' ), '' );
+
+		if ( '' === $bucket ) {
+			$allowed = ( $this->allowed_buckets )();
+			$bucket  = '' !== $this->default_bucket ? $this->default_bucket : ( 1 === count( $allowed ) ? (string) reset( $allowed ) : '' );
+		}
+
+		return $this->is_bucket_allowed( $bucket ) ? $bucket : '';
+	}
+
+	/**
+	 * The first half of the connection test: the account and its buckets
+	 *
+	 * @return WP_REST_Response
+	 */
+	private function connection_answer(): WP_REST_Response {
 		// Account-level ListBuckets works for admin / master tokens.
 		$result = $this->client->get_bucket_count();
 
@@ -674,6 +865,277 @@ class Controller {
 			'message' => __( 'Connection failed.', 'sugarcommerce' ),
 			'summary' => $result->get_error_message(),
 		] );
+	}
+
+	/**
+	 * Start a large upload, or find the one this file already began
+	 *
+	 * The same file dropped again -- after a reload, a closed tab, a lost
+	 * connection -- has the same key, size and fingerprint, so its upload is
+	 * picked up where storage says it stopped rather than started over.
+	 *
+	 * @param WP_REST_Request $request Request.
+	 *
+	 * @return WP_REST_Response|WP_Error
+	 */
+	public function rest_start_upload( WP_REST_Request $request ) {
+		$bucket    = (string) $request['bucket'];
+		$key       = (string) $request['key'];
+		$size      = (int) $request['size'];
+		$owner     = get_current_user_id();
+		$multipart = $this->multipart( $bucket );
+		$upload    = $multipart->match( $key, $size, (string) $request['fingerprint'], $owner );
+		$resumed   = null !== $upload;
+
+		if ( null !== $upload ) {
+			$upload = $multipart->resume( $upload );
+
+			// Storage no longer has it: start again.
+			if ( is_wp_error( $upload ) ) {
+				$upload  = null;
+				$resumed = false;
+			}
+		}
+
+		if ( null === $upload ) {
+			$upload = $multipart->begin( $key, $size, [
+				'mime_type'   => (string) $request['mime_type'],
+				'fingerprint' => (string) $request['fingerprint'],
+				'owner'       => $owner,
+			] );
+		}
+
+		if ( is_wp_error( $upload ) ) {
+			return $this->upload_error( $upload );
+		}
+
+		return $this->rest_ok( $this->upload_payload( $upload, $resumed ) + [ 'checksums' => $this->checksums_allowed( $bucket ) ], $resumed ? 200 : 201 );
+	}
+
+	/**
+	 * Whether the bucket lets this site's browser send a part's Content-MD5
+	 *
+	 * Asked the way the browser asks, by a preflight, and kept for an hour.
+	 * A bucket that refuses the header refuses the part outright, which
+	 * looks like a dropped connection to the script; so the script is told
+	 * up front and leaves the header off. A bucket that allows no uploads
+	 * from here at all fails the upload either way, so that is a yes.
+	 *
+	 * @param string $bucket Bucket name.
+	 *
+	 * @return bool
+	 */
+	private function checksums_allowed( string $bucket ): bool {
+		$origin = Origin::current();
+
+		if ( '' === $origin ) {
+			return true;
+		}
+
+		$cache  = $this->client->cache();
+		$key    = $cache->key( 'upload_checksums', [ 'origin' => $origin ], $bucket );
+		$cached = $cache->get( $key );
+
+		if ( is_array( $cached ) ) {
+			return (bool) $cached['allowed'];
+		}
+
+		$url     = $this->client->signer()->presign_put( $bucket, Probe::PREFIX . 'preflight.txt', 300 );
+		$allowed = Probe::preflight( $url, $origin, 'content-type,content-md5' ) || ! Probe::preflight( $url, $origin, 'content-type' );
+
+		$cache->set( $key, [ 'allowed' => $allowed ], HOUR_IN_SECONDS );
+
+		return $allowed;
+	}
+
+	/**
+	 * Where a large upload stands, by storage's own list of parts
+	 *
+	 * @param WP_REST_Request $request Request.
+	 *
+	 * @return WP_REST_Response|WP_Error
+	 */
+	public function rest_upload_status( WP_REST_Request $request ) {
+		$upload = $this->owned_upload( $request );
+
+		if ( is_wp_error( $upload ) ) {
+			return $upload;
+		}
+
+		$upload = $this->multipart( (string) $request['bucket'] )->resume( $upload );
+
+		return is_wp_error( $upload ) ? $this->upload_error( $upload ) : $this->rest_ok( $this->upload_payload( $upload, true ) );
+	}
+
+	/**
+	 * Presigned URLs for some of an upload's parts
+	 *
+	 * @param WP_REST_Request $request Request.
+	 *
+	 * @return WP_REST_Response|WP_Error
+	 */
+	public function rest_sign_upload_parts( WP_REST_Request $request ) {
+		$upload = $this->owned_upload( $request );
+
+		if ( is_wp_error( $upload ) ) {
+			return $upload;
+		}
+
+		$numbers = array_slice( array_map( 'intval', (array) $request['parts'] ), 0, self::PARTS_PER_SIGNING );
+		$urls    = $this->multipart( (string) $request['bucket'] )->sign( $upload, $numbers, self::PART_URL_SECONDS );
+
+		return $this->rest_ok( [
+			'id'         => $upload->id,
+			// An object, not a list: the keys are part numbers.
+			'urls'       => (object) $urls,
+			'expires_in' => self::PART_URL_SECONDS,
+		] );
+	}
+
+	/**
+	 * Put a large upload together once every part is in storage
+	 *
+	 * @param WP_REST_Request $request Request.
+	 *
+	 * @return WP_REST_Response|WP_Error
+	 */
+	public function rest_complete_upload( WP_REST_Request $request ) {
+		$upload = $this->owned_upload( $request );
+
+		if ( is_wp_error( $upload ) ) {
+			return $upload;
+		}
+
+		$bucket  = (string) $request['bucket'];
+		$address = $this->multipart( $bucket )->finish( $upload );
+
+		if ( is_wp_error( $address ) ) {
+			return $this->upload_error( $address );
+		}
+
+		$this->client->cache()->flush_bucket( $bucket );
+
+		return $this->rest_ok( [
+			'id'      => $upload->id,
+			'bucket'  => $bucket,
+			'key'     => $upload->key,
+			'address' => $address,
+			'size'    => $upload->size,
+			'message' => __( 'Upload complete.', 'sugarcommerce' ),
+		] );
+	}
+
+	/**
+	 * Give a large upload up, freeing its parts in storage
+	 *
+	 * @param WP_REST_Request $request Request.
+	 *
+	 * @return WP_REST_Response|WP_Error
+	 */
+	public function rest_abort_upload( WP_REST_Request $request ) {
+		$upload = $this->owned_upload( $request );
+
+		if ( is_wp_error( $upload ) ) {
+			return $upload;
+		}
+
+		if ( ! $this->multipart( (string) $request['bucket'] )->abort( $upload ) ) {
+			return $this->rest_fail( 'rest_upload_abort_failed', __( 'Storage would not cancel the upload. It will be cleared away automatically within a week.', 'sugarcommerce' ), 502 );
+		}
+
+		return $this->rest_ok( [
+			'id'      => $upload->id,
+			'aborted' => true,
+		] );
+	}
+
+	/**
+	 * Uploads to one bucket
+	 *
+	 * @param string $bucket Bucket name.
+	 *
+	 * @return Multipart
+	 */
+	private function multipart( string $bucket ): Multipart {
+		return new Multipart( $this->client->bucket( $bucket ) );
+	}
+
+	/**
+	 * The upload a request names, if it is the current user's
+	 *
+	 * An upload id is not a secret anybody else should be able to spend: it
+	 * is the current user's, in the bucket the route names, or nothing.
+	 *
+	 * @param WP_REST_Request $request Request.
+	 *
+	 * @return Upload|WP_Error
+	 */
+	private function owned_upload( WP_REST_Request $request ): Upload|WP_Error {
+		$upload = $this->multipart( (string) $request['bucket'] )->find( (string) $request['id'] );
+
+		if ( null === $upload ) {
+			return $this->rest_fail( 'rest_upload_not_found', __( 'That upload is finished, cancelled or was never started.', 'sugarcommerce' ), 404 );
+		}
+
+		if ( $upload->owner !== get_current_user_id() ) {
+			return $this->rest_fail( 'rest_upload_forbidden', __( 'That upload was started by somebody else.', 'sugarcommerce' ), rest_authorization_required_code() );
+		}
+
+		return $upload;
+	}
+
+	/**
+	 * What the script needs to send an upload's parts
+	 *
+	 * @param Upload $upload  The upload.
+	 * @param bool   $resumed Whether it was begun before.
+	 *
+	 * @return array<string, mixed>
+	 */
+	private function upload_payload( Upload $upload, bool $resumed ): array {
+		return [
+			'id'         => $upload->id,
+			'key'        => $upload->key,
+			'size'       => $upload->size,
+			'part_size'  => $upload->part_size,
+			'part_count' => $upload->part_count(),
+			'done'       => array_map( 'intval', array_keys( $upload->parts ) ),
+			'progress'   => $upload->progress(),
+			'resumed'    => $resumed,
+		];
+	}
+
+	/**
+	 * An upload failure, with a status a REST response can carry
+	 *
+	 * The upload's own errors keep theirs; storage's refusals become a 502
+	 * with storage's words, since storage refusing is not this site
+	 * refusing the browser.
+	 *
+	 * @param WP_Error $error The failure.
+	 *
+	 * @return WP_Error
+	 */
+	private function upload_error( WP_Error $error ): WP_Error {
+		$data = (array) $error->get_error_data();
+
+		if ( str_starts_with( (string) $error->get_error_code(), 's3_upload_' ) && isset( $data['status'] ) ) {
+			return $error;
+		}
+
+		$reason = (string) ( $data['reason'] ?? '' );
+
+		return new WP_Error(
+			(string) $error->get_error_code(),
+			'' === $reason
+				? $error->get_error_message()
+				/* translators: %s: storage's own words for why it refused. */
+				: sprintf( __( 'Storage refused: %s', 'sugarcommerce' ), $reason ),
+			[
+				'status'     => 502,
+				'error_code' => (string) ( $data['error_code'] ?? '' ),
+			]
+		);
 	}
 
 	/**

@@ -18,6 +18,7 @@ namespace SugarCommerce\Storage\Browser\Admin;
 use SugarCommerce\Storage\Utils\Runtime;
 use SugarCommerce\Storage\Browser\Rest\Controller;
 use SugarCommerce\Storage\Files\Mime;
+use SugarCommerce\Storage\S3\Bucket;
 use SugarCommerce\Plugin\Assets as AssetFiles;
 
 /**
@@ -64,7 +65,8 @@ class Assets {
 			'browser-folders'      => [ 'js/browser/folders.js', [ 'jquery', 'wp-util', $core, $modals ] ],
 			'browser-integrations' => [ 'js/browser/integrations.js', [ 'jquery', 'wp-util', $core ] ],
 			'browser-cors'         => [ 'js/browser/buckets.js', [ 'jquery', 'wp-util', $core, $modals ] ],
-			'browser-upload'       => [ 'js/browser/upload.js', [ 'jquery', 'wp-util', $config_handle, $core ] ],
+			'browser-md5'          => [ 'js/browser/md5.js', [] ],
+			'browser-upload'       => [ 'js/browser/upload.js', [ 'jquery', 'wp-util', $config_handle, $core, Runtime::handle( 'browser-md5' ) ] ],
 		];
 
 		$handles = [];
@@ -216,6 +218,19 @@ class Assets {
 				'i18n'              => [
 					/* translators: %d: number of files already present */
 					'alreadyAdded' => __( '%d of the selected files are already in this list and were skipped.', 'sugarcommerce' ),
+					/* translators: {bucket}: a bucket name; keep the braces. */
+					'checking'     => __( 'Checking "{bucket}": listing, writing, reading back, deleting, large uploads and uploads from this site…', 'sugarcommerce' ),
+				],
+				// Files from this size up go in parts, each with its own
+				// checksum, and resume when dropped again; past one PUT's
+				// limit nothing else will do.
+				'multipart'         => [
+					'threshold'    => 64 * MB_IN_BYTES,
+					'singlePutMax' => Bucket::MAX_PUT_SIZE,
+					'maxSize'      => Bucket::MAX_OBJECT_SIZE,
+					'concurrency'  => 4,
+					'signBatch'    => 20,
+					'retries'      => 4,
 				],
 				'restUrl'           => esc_url_raw( rest_url( $this->rest->route_path() ) ),
 				'restNonce'         => wp_create_nonce( 'wp_rest' ),

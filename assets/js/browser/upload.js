@@ -1,6 +1,13 @@
 /**
  * S3 Browser Upload Functionality - Updated with File Validation
  * Handles direct browser uploads to S3 buckets using presigned URLs
+ *
+ * A file from S3BrowserGlobalConfig.multipart.threshold up -- and every file
+ * past the 5 GB one PUT may carry -- goes as a multipart upload instead: the
+ * server starts it and signs part URLs, the browser PUTs each part with a
+ * Content-MD5 storage checks it against, a few at a time, retrying a part
+ * that fails, and the server assembles what storage says it holds. Dropping
+ * the same file again after a reload carries on from the parts storage kept.
  */
 (function ($) {
     'use strict';
@@ -218,10 +225,12 @@
                 $uploadList.append($progress);
                 self.activeUploadCount++;
 
-                var uploadPromise = self.getPresignedUrl(bucket, objectKey)
-                    .then(function (url) {
-                        return self.uploadToS3(file, url, $progress, uploadId);
-                    })
+                var uploadPromise = (self.usesParts(file)
+                    ? self.uploadInParts(file, bucket, objectKey, $progress, uploadId)
+                    : self.getPresignedUrl(bucket, objectKey)
+                        .then(function (url) {
+                            return self.uploadToS3(file, url, $progress, uploadId);
+                        }))
                     .then(function () {
                         $progress.addClass('s3-upload-success');
                         $progress.find('.s3-upload-status').html(window.S3Browser.icon('done'));
@@ -388,6 +397,434 @@
                 xhr.setRequestHeader('Content-Type', file.type || 'application/octet-stream');
                 xhr.send(file);
             });
+        },
+
+        /**
+         * The multipart settings, with defaults for a page that has none.
+         */
+        partSettings: function () {
+            var given = (window.S3BrowserGlobalConfig && S3BrowserGlobalConfig.multipart) || {};
+
+            return {
+                threshold: given.threshold || 64 * 1048576,
+                singlePutMax: given.singlePutMax || 5 * 1073741824,
+                maxSize: given.maxSize || 5 * 1099511627776,
+                concurrency: Math.max(1, given.concurrency || 4),
+                signBatch: Math.max(1, given.signBatch || 20),
+                retries: Math.max(1, given.retries || 4)
+            };
+        },
+
+        /**
+         * Whether a file goes in parts.
+         */
+        usesParts: function (file) {
+            var settings = this.partSettings();
+
+            return file.size >= settings.threshold || file.size > settings.singlePutMax;
+        },
+
+        /**
+         * One call to the upload routes.
+         */
+        partsRequest: function (method, bucket, path, data) {
+            var strings = s3BrowserConfig.i18n.upload;
+
+            return new Promise(function (resolve, reject) {
+                $.ajax({
+                    url: S3BrowserGlobalConfig.restUrl + '/buckets/' + encodeURIComponent(bucket) + '/uploads' + (path ? '/' + path : ''),
+                    method: method,
+                    contentType: 'application/json; charset=utf-8',
+                    dataType: 'json',
+                    headers: {'X-WP-Nonce': S3BrowserGlobalConfig.restNonce},
+                    data: data ? JSON.stringify(data) : undefined,
+                    success: function (payload) {
+                        resolve(payload || {});
+                    },
+                    error: function (xhr) {
+                        var body = xhr.responseJSON || {};
+                        var error = new Error(body.message || strings.networkError);
+
+                        error.code = body.code || '';
+                        error.data = body.data || {};
+                        error.status = xhr.status;
+                        reject(error);
+                    }
+                });
+            });
+        },
+
+        /**
+         * Send a file as a multipart upload, resuming one this file began.
+         */
+        uploadInParts: function (file, bucket, objectKey, $progress, rowId) {
+            var self = this;
+            var settings = this.partSettings();
+            var strings = s3BrowserConfig.i18n.upload;
+            var job = {
+                file: file,
+                bucket: bucket,
+                id: '',
+                partSize: 0,
+                partCount: 0,
+                done: {},
+                doneBytes: 0,
+                inFlight: {},
+                xhrs: {},
+                urls: {},
+                signing: null,
+                checksums: true,
+                cancelled: false,
+                $progress: $progress,
+                lastLoaded: 0,
+                lastTime: Date.now()
+            };
+
+            if (file.size > settings.maxSize) {
+                return Promise.reject(new Error(strings.tooLarge.replace('{filename}', file.name)));
+            }
+
+            self.activeUploads[rowId] = {
+                abort: function () {
+                    job.cancelled = true;
+
+                    Object.keys(job.xhrs).forEach(function (number) {
+                        job.xhrs[number].abort();
+                    });
+
+                    // Free the parts in storage rather than leave them
+                    // billed until the weekly clear-up.
+                    if (job.id) {
+                        self.partsRequest('DELETE', bucket, job.id).catch(function () {});
+                    }
+                }
+            };
+
+            return self.partsRequest('POST', bucket, '', {
+                key: objectKey,
+                size: file.size,
+                mime_type: file.type || 'application/octet-stream',
+                fingerprint: [file.name, file.size, file.lastModified].join('|')
+            }).then(function (upload) {
+                job.id = upload.id;
+                job.partSize = upload.part_size;
+                job.partCount = upload.part_count;
+
+                // The server asked the bucket whether it lets this page send
+                // Content-MD5; one that does not refuses the part outright.
+                if (upload.checksums === false) {
+                    job.checksums = false;
+                    self.partNotice($progress, strings.noChecksums);
+                }
+
+                (upload.done || []).forEach(function (number) {
+                    job.done[number] = true;
+                    job.doneBytes += self.partLength(job, number);
+                });
+
+                if (upload.resumed && (upload.done || []).length) {
+                    self.partNotice($progress, strings.resuming
+                        .replace('{done}', upload.done.length)
+                        .replace('{total}', upload.part_count));
+                }
+
+                self.showPartProgress(job);
+
+                return self.sendMissingParts(job);
+            }).then(function () {
+                return self.completeParts(job, true);
+            });
+        },
+
+        /**
+         * Ask the server to assemble the upload; send again any part storage
+         * says it is missing, once.
+         */
+        completeParts: function (job, mayRetry) {
+            var self = this;
+
+            self.partNotice(job.$progress, s3BrowserConfig.i18n.upload.assembling);
+
+            return self.partsRequest('POST', job.bucket, job.id + '/complete').catch(function (error) {
+                if (!mayRetry || error.code !== 's3_upload_incomplete' || !error.data || !error.data.missing) {
+                    throw error;
+                }
+
+                error.data.missing.forEach(function (number) {
+                    if (job.done[number]) {
+                        job.done[number] = false;
+                        job.doneBytes -= self.partLength(job, number);
+                    }
+                });
+
+                return self.sendMissingParts(job).then(function () {
+                    return self.completeParts(job, false);
+                });
+            });
+        },
+
+        /**
+         * Bytes in one part: the part size, except the last.
+         */
+        partLength: function (job, number) {
+            return Math.min(job.partSize, job.file.size - (number - 1) * job.partSize);
+        },
+
+        /**
+         * Send every part not yet in storage, a few at a time.
+         */
+        sendMissingParts: function (job) {
+            var self = this;
+            var settings = this.partSettings();
+            var queue = [];
+
+            for (var number = 1; number <= job.partCount; number++) {
+                if (!job.done[number]) {
+                    queue.push(number);
+                }
+            }
+
+            var next = 0;
+
+            function worker() {
+                if (job.cancelled) {
+                    return Promise.reject(new Error(s3BrowserConfig.i18n.upload.uploadCancelled));
+                }
+
+                if (job.halted || next >= queue.length) {
+                    return Promise.resolve();
+                }
+
+                var part = queue[next++];
+
+                return self.sendPart(job, part, queue.slice(next), 1).then(worker);
+            }
+
+            var workers = [];
+
+            for (var w = 0; w < Math.min(settings.concurrency, queue.length); w++) {
+                workers.push(worker());
+            }
+
+            job.halted = false;
+
+            // One part given up on stops the rest, without cancelling: the
+            // parts already in storage stay, for the same file dropped again.
+            return Promise.all(workers).catch(function (error) {
+                job.halted = true;
+
+                Object.keys(job.xhrs).forEach(function (number) {
+                    job.xhrs[number].abort();
+                });
+
+                throw error;
+            });
+        },
+
+        /**
+         * A signed URL for a part, asking for the next batch with it.
+         */
+        partUrl: function (job, number, upcoming) {
+            var self = this;
+
+            if (job.urls[number]) {
+                return Promise.resolve(job.urls[number]);
+            }
+
+            // One signing at a time; a worker that needs a URL the running
+            // one did not ask for waits for it and asks again.
+            if (job.signing) {
+                return job.signing.then(function () {
+                    return self.partUrl(job, number, upcoming);
+                });
+            }
+
+            var wanted = [number].concat(upcoming.filter(function (n) {
+                return !job.urls[n];
+            })).slice(0, this.partSettings().signBatch);
+
+            job.signing = self.partsRequest('POST', job.bucket, job.id + '/parts', {parts: wanted}).then(function (signed) {
+                Object.keys(signed.urls || {}).forEach(function (n) {
+                    job.urls[n] = signed.urls[n];
+                });
+                job.signing = null;
+            }, function (error) {
+                job.signing = null;
+                throw error;
+            });
+
+            return job.signing.then(function () {
+                if (!job.urls[number]) {
+                    throw new Error(s3BrowserConfig.i18n.upload.failedPresignedUrl);
+                }
+
+                return job.urls[number];
+            });
+        },
+
+        /**
+         * Send one part, retrying on a dropped connection or a refusal that
+         * may not happen again.
+         */
+        sendPart: function (job, number, upcoming, attempt) {
+            var self = this;
+            var settings = this.partSettings();
+            var strings = s3BrowserConfig.i18n.upload;
+            var offset = (number - 1) * job.partSize;
+            var blob = job.file.slice(offset, offset + self.partLength(job, number));
+
+            return self.partUrl(job, number, upcoming).then(function (url) {
+                return blob.arrayBuffer().then(function (bytes) {
+                    var checksum = job.checksums ? window.S3BrowserMd5.base64(bytes) : '';
+
+                    return self.putPart(job, number, url, bytes, checksum);
+                });
+            }).then(function () {
+                job.done[number] = true;
+                job.doneBytes += self.partLength(job, number);
+                delete job.inFlight[number];
+                self.showPartProgress(job);
+            }).catch(function (error) {
+                delete job.inFlight[number];
+
+                if (job.cancelled || job.halted) {
+                    throw new Error(strings.uploadCancelled);
+                }
+
+                // An expired or refused URL is signed again.
+                if (error.status === 403) {
+                    delete job.urls[number];
+                }
+
+                var worthAgain = error.status === 0 || error.status === 403 || error.status === 408 || error.status === 429 || error.status >= 500;
+
+                if (!worthAgain || attempt >= settings.retries) {
+                    throw new Error(strings.partFailed.replace('{part}', number).replace('{reason}', error.message) + ' ' + strings.resumeHint);
+                }
+
+                self.partNotice(job.$progress, strings.retrying.replace('{part}', number));
+
+                return new Promise(function (resolve) {
+                    setTimeout(resolve, 1000 * Math.pow(2, attempt - 1));
+                }).then(function () {
+                    return self.sendPart(job, number, upcoming, attempt + 1);
+                });
+            });
+        },
+
+        /**
+         * PUT one part's bytes to its URL.
+         */
+        putPart: function (job, number, url, bytes, checksum) {
+            var self = this;
+
+            return new Promise(function (resolve, reject) {
+                var xhr = new XMLHttpRequest();
+
+                job.xhrs[number] = xhr;
+
+                xhr.upload.addEventListener('progress', function (e) {
+                    job.inFlight[number] = e.loaded;
+                    self.showPartProgress(job);
+                });
+
+                xhr.addEventListener('load', function () {
+                    delete job.xhrs[number];
+
+                    if (xhr.status >= 200 && xhr.status < 300) {
+                        resolve();
+                        return;
+                    }
+
+                    var reason = (/<Message>([^<]*)<\/Message>/.exec(xhr.responseText || '') || [])[1];
+                    var error = new Error(reason || (s3BrowserConfig.i18n.upload.uploadFailedStatus + ' ' + xhr.status));
+
+                    error.status = xhr.status;
+                    reject(error);
+                });
+
+                xhr.addEventListener('error', function () {
+                    delete job.xhrs[number];
+
+                    var error = new Error(s3BrowserConfig.i18n.upload.networkError);
+
+                    error.status = 0;
+                    reject(error);
+                });
+
+                xhr.addEventListener('abort', function () {
+                    delete job.xhrs[number];
+
+                    var error = new Error(s3BrowserConfig.i18n.upload.uploadCancelled);
+
+                    error.status = -1;
+                    reject(error);
+                });
+
+                xhr.open('PUT', url, true);
+
+                if (checksum) {
+                    xhr.setRequestHeader('Content-MD5', checksum);
+                }
+
+                xhr.send(bytes);
+            });
+        },
+
+        /**
+         * Draw a multipart upload's progress: parts in storage plus what is
+         * on its way.
+         */
+        showPartProgress: function (job) {
+            var $progress = job.$progress;
+            var size = job.file.size;
+            var moving = 0;
+
+            Object.keys(job.inFlight).forEach(function (number) {
+                moving += job.inFlight[number];
+            });
+
+            var loaded = Math.min(size, job.doneBytes + moving);
+            var percent = size ? Math.floor((loaded / size) * 100) : 0;
+
+            if (!$progress || !$progress.find) {
+                return;
+            }
+
+            $progress.find('.s3-progress').css('width', percent + '%');
+            $progress.find('.s3-progress-text').text(percent + '%');
+
+            var now = Date.now();
+            var seconds = (now - job.lastTime) / 1000;
+
+            if (seconds > 0.5) {
+                var speed = Math.max(0, loaded - job.lastLoaded) / seconds;
+
+                $progress.find('.s3-transfer-data').text(
+                    this.formatFileSize(loaded) + ' / ' + this.formatFileSize(size) + ' \u2022 ' + this.formatFileSize(speed) + '/s'
+                );
+
+                job.lastLoaded = loaded;
+                job.lastTime = now;
+            }
+        },
+
+        /**
+         * A line under one upload's bar.
+         */
+        partNotice: function ($progress, text) {
+            if (!$progress || !$progress.find) {
+                return;
+            }
+
+            var $note = $progress.find('.s3-upload-part-note');
+
+            if (!$note.length) {
+                $note = $('<div class="s3-upload-part-note"></div>');
+                $progress.find('.s3-progress-container').after($note);
+            }
+
+            $note.text(text);
         },
 
         /**

@@ -102,6 +102,8 @@ function wp_test_reset(): void {
 	$GLOBALS['wp_test_is_ssl']            = false;
 	$GLOBALS['wp_test_home_url']          = 'https://example.test';
 	$GLOBALS['test_user_can']             = true;
+	$GLOBALS['test_user_id']              = 1;
+	$GLOBALS['wp_test_cron']              = [];
 	$GLOBALS['registered_rest_routes']    = [];
 	$GLOBALS['doing_it_wrong']            = [];
 	$GLOBALS['wpdb']                      = new Test_WPDB();

@@ -79,6 +79,50 @@ final class Bucket {
 	public const PART_LIMIT = 9000;
 
 	/**
+	 * The most parts S3, R2 and the rest accept in one upload.
+	 *
+	 * @since 1.0.0
+	 */
+	public const MAX_PARTS = 10000;
+
+	/**
+	 * The largest part S3 accepts (5 GiB).
+	 *
+	 * @since 1.0.0
+	 */
+	public const MAX_PART_SIZE = 5 * 1073741824;
+
+	/**
+	 * The largest object S3 and R2 store (5 TiB), and so the largest upload.
+	 *
+	 * Split into PART_LIMIT parts that is parts of about 583 MiB, well inside
+	 * MAX_PART_SIZE.
+	 *
+	 * @since 1.0.0
+	 */
+	public const MAX_OBJECT_SIZE = 5 * 1099511627776;
+
+	/**
+	 * The largest object one PUT may carry (5 GiB). Past it, only a multipart
+	 * upload will do.
+	 *
+	 * @since 1.0.0
+	 */
+	public const MAX_PUT_SIZE = 5 * 1073741824;
+
+	/**
+	 * Uploads ListMultipartUploads returns in one page, at most.
+	 */
+	private const UPLOADS_PAGE = 1000;
+
+	/**
+	 * Pages of unfinished uploads to follow before stopping: a bucket with
+	 * more than fifty thousand of them has a problem a page of this will not
+	 * fix, and a clean-up that runs daily gets the rest tomorrow.
+	 */
+	private const UPLOADS_PAGES = 50;
+
+	/**
 	 * Parts ListParts returns in one page, at most.
 	 */
 	private const PARTS_PAGE = 1000;
@@ -131,12 +175,13 @@ final class Bucket {
 	 * @param int $bytes File size.
 	 * @param int $floor Smallest part to use, when larger than S3's minimum --
 	 *                   fewer round trips for an uploader that can afford to
-	 *                   retry bigger parts. Never below MIN_PART_SIZE.
+	 *                   retry bigger parts. Never below MIN_PART_SIZE, and
+	 *                   never above MAX_PART_SIZE.
 	 *
 	 * @return int
 	 */
 	public static function part_size( int $bytes, int $floor = self::MIN_PART_SIZE ): int {
-		return max( self::MIN_PART_SIZE, $floor, (int) ceil( $bytes / self::PART_LIMIT ) );
+		return min( self::MAX_PART_SIZE, max( self::MIN_PART_SIZE, $floor, (int) ceil( $bytes / self::PART_LIMIT ) ) );
 	}
 
 	/**
@@ -557,6 +602,158 @@ final class Bucket {
 			'more'  => 'true' === strtolower( self::field( $xml, 'IsTruncated' ) ),
 			'next'  => (int) self::field( $xml, 'NextPartNumberMarker' ),
 		);
+	}
+
+	/**
+	 * Send one part of a multipart upload from this server.
+	 *
+	 * Signed over the part's own SHA-256, with its Content-MD5 alongside, so
+	 * storage checks the bytes twice and refuses a part that changed on the
+	 * way (XAmzContentSHA256Mismatch, BadDigest) rather than keeping it.
+	 *
+	 * @since 1.0.0
+	 *
+	 * @param string $key       Object key.
+	 * @param string $upload_id Multipart upload id.
+	 * @param int    $number    Part number, 1 to MAX_PARTS.
+	 * @param string $bytes     The part.
+	 * @param int    $timeout   Seconds to allow. Default 300.
+	 *
+	 * @return string|WP_Error The part's ETag, unquoted. `s3_upload_part_failed`
+	 *                         on a refusal, or a part answered without one.
+	 *
+	 * @throws InvalidArgumentException On a part number S3 would refuse.
+	 */
+	public function upload_part( string $key, string $upload_id, int $number, string $bytes, int $timeout = 300 ): string|WP_Error {
+		if ( $number < 1 || $number > self::MAX_PARTS ) {
+			throw new InvalidArgumentException( sprintf( 'Not a part number: %d.', $number ) );
+		}
+
+		$request  = $this->signer->sign(
+			Method::PUT,
+			$this->name,
+			$key,
+			array(
+				'partNumber' => (string) $number,
+				'uploadId'   => $upload_id,
+			),
+			$bytes,
+			array( 'content-md5' => self::md5( $bytes ) )
+		);
+		$response = Transport::request( 'PUT', $request->url, $request->headers, $bytes, array( 'timeout' => $timeout ) );
+		$etag     = trim( Transport::header( $response, 'etag' ), "\" \t" );
+
+		if ( ! Transport::is_success( $response['status'] ) ) {
+			return self::refusal( 'upload_part', $response );
+		}
+
+		// A part without an ETag cannot be assembled.
+		return '' === $etag
+			? new WP_Error( 's3_upload_part_failed', 'Storage kept the part but did not say its ETag.', array( 'status' => $response['status'] ) )
+			: $etag;
+	}
+
+	/**
+	 * Every multipart upload started in the bucket and neither finished nor
+	 * aborted, oldest page first.
+	 *
+	 * ListMultipartUploads, followed page by page. Their parts are billed
+	 * and invisible to an object listing, so this is the only way to find
+	 * them.
+	 *
+	 * @since 1.0.0
+	 *
+	 * @param string $prefix Only uploads of keys starting with this.
+	 *
+	 * @return array<int, array{key: string, upload_id: string, initiated: string}>|WP_Error
+	 *         `s3_uploads_failed` with storage's code in its data.
+	 */
+	public function uploads( string $prefix = '' ): array|WP_Error {
+		$uploads   = array();
+		$key       = '';
+		$upload_id = '';
+
+		for ( $page = 0; $page < self::UPLOADS_PAGES; $page++ ) {
+			$request  = $this->signer->sign_list_multipart_uploads( $this->name, $prefix, $key, $upload_id, self::UPLOADS_PAGE );
+			$response = Transport::request( 'GET', $request->url, $request->headers, null, array( 'limit_response_size' => 8388608 ) );
+			$document = Transport::is_success( $response['status'] ) ? Xml::load( $response['body'] ) : null;
+
+			// An answer is only a listing if it says it is one.
+			if ( null === $document || 'ListMultipartUploadsResult' !== $document->getName() ) {
+				return self::refusal( 'uploads', $response );
+			}
+
+			foreach ( Xml::children( $document, 'Upload' ) as $node ) {
+				$entry = array(
+					'key'       => Xml::text( $node, 'Key' ),
+					'upload_id' => Xml::text( $node, 'UploadId' ),
+					'initiated' => Xml::text( $node, 'Initiated' ),
+				);
+
+				if ( '' !== $entry['key'] && '' !== $entry['upload_id'] ) {
+					$uploads[] = $entry;
+				}
+			}
+
+			$next_key = Xml::text( $document, 'NextKeyMarker' );
+			$next_id  = Xml::text( $document, 'NextUploadIdMarker' );
+
+			// A page that names no way on, or the same way as last time,
+			// would only be asked for again.
+			if ( 'true' !== strtolower( Xml::text( $document, 'IsTruncated' ) ) || '' === $next_key || ( $next_key === $key && $next_id === $upload_id ) ) {
+				break;
+			}
+
+			$key       = $next_key;
+			$upload_id = $next_id;
+		}
+
+		return $uploads;
+	}
+
+	/**
+	 * Abort every unfinished multipart upload older than some days.
+	 *
+	 * What a provider's AbortIncompleteMultipartUpload lifecycle rule does,
+	 * for a bucket that has none -- or keys that may not set one. An upload
+	 * a browser or a job is still sending is days younger than this, so the
+	 * age is the whole test.
+	 *
+	 * @since 1.0.0
+	 *
+	 * @param int    $days   Abort uploads started more than this many days
+	 *                       ago. At least 1.
+	 * @param string $prefix Only uploads of keys starting with this.
+	 * @param int    $now    The time to measure from. Default now.
+	 *
+	 * @return array{aborted: array<int, array{key: string, upload_id: string, initiated: string}>, failed: array<int, array{key: string, upload_id: string, initiated: string}>}|WP_Error
+	 *         An error when the uploads could not be listed.
+	 */
+	public function abort_stale( int $days, string $prefix = '', ?int $now = null ): array|WP_Error {
+		$uploads = $this->uploads( $prefix );
+
+		if ( $uploads instanceof WP_Error ) {
+			return $uploads;
+		}
+
+		$before = ( $now ?? time() ) - max( 1, $days ) * 86400;
+		$result = array(
+			'aborted' => array(),
+			'failed'  => array(),
+		);
+
+		foreach ( $uploads as $upload ) {
+			$started = strtotime( $upload['initiated'] );
+
+			// A time that does not parse is not old enough to throw away.
+			if ( false === $started || $started > $before ) {
+				continue;
+			}
+
+			$result[ $this->abort_upload( $upload['key'], $upload['upload_id'] ) ? 'aborted' : 'failed' ][] = $upload;
+		}
+
+		return $result;
 	}
 
 	/* ─── Reading ───────────────────────────────────────────────────── */
@@ -1203,9 +1400,17 @@ final class Bucket {
 		$body = (string) file_get_contents( $path, false, null, $offset, max( 0, $length ) ); // phpcs:ignore WordPress.WP.AlternativeFunctions.file_get_contents_file_get_contents -- a byte range of a local file.
 
 		// Content-Type is not among a presigned URL's signed headers, so it
-		// may be sent alongside, and storage keeps it.
+		// may be sent alongside, and storage keeps it. So may Content-MD5,
+		// which storage checks the bytes against and refuses (BadDigest)
+		// when they were changed on the way.
+		$headers = array( 'content-md5' => self::md5( $body ) );
+
+		if ( '' !== $mime_type ) {
+			$headers['content-type'] = $mime_type;
+		}
+
 		$response = Transport::send(
-			new SignedRequest( Method::PUT, $url, '' === $mime_type ? array() : array( 'content-type' => $mime_type ), $body ),
+			new SignedRequest( Method::PUT, $url, $headers, $body ),
 			array( 'timeout' => (int) $args['timeout'] )
 		);
 
@@ -1284,6 +1489,17 @@ final class Bucket {
 		}
 
 		return true;
+	}
+
+	/**
+	 * The Content-MD5 of some bytes: their MD5, base64 encoded.
+	 *
+	 * @param string $bytes The bytes.
+	 *
+	 * @return string
+	 */
+	private static function md5( string $bytes ): string {
+		return base64_encode( (string) hash( 'md5', $bytes, true ) );
 	}
 
 	/**

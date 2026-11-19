@@ -218,6 +218,12 @@
 }
 
 /* Transfer Data Display */
+.s3-upload-part-note {
+    margin-top: 4px;
+    font-size: 12px;
+    color: #646970;
+}
+
 .s3-transfer-data {
     /* Fixed width, not content width.
      *

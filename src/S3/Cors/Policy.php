@@ -253,6 +253,31 @@ final readonly class Policy implements \Countable, \IteratorAggregate {
 	}
 
 	/**
+	 * May this origin send this request header, with this method?
+	 *
+	 * For a header the uploader would like to send rather than must: a
+	 * part's Content-MD5 lets storage check it, and an upload without one
+	 * still works.
+	 *
+	 * @since 1.0.0
+	 *
+	 * @param string $origin Scheme and host.
+	 * @param string $method HTTP method.
+	 * @param string $header Request header name.
+	 *
+	 * @return bool
+	 */
+	public function accepts( string $origin, string $method, string $header ): bool {
+		foreach ( $this->rules as $rule ) {
+			if ( $rule->allows( $origin, $method ) && $rule->accepts( $header ) ) {
+				return true;
+			}
+		}
+
+		return false;
+	}
+
+	/**
 	 * Will a browser multipart upload from this origin actually work?
 	 *
 	 * The question a deployment check should ask, rather than "is CORS set?".

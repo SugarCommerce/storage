@@ -158,3 +158,25 @@
         margin-right: 0;
     }
 }
+
+/* The whole connection check: one line per step. */
+.s3-check {
+    margin-top: 8px;
+}
+
+.s3-check-list {
+    margin: 6px 0 0;
+    list-style: none;
+}
+
+.s3-check-list li {
+    margin: 0 0 4px;
+}
+
+.s3-check-failed {
+    color: #b32d2e;
+}
+
+.s3-check-skipped {
+    color: #646970;
+}

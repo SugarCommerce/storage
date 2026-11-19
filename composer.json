@@ -74,6 +74,7 @@
   },
   "scripts": {
     "test": "phpunit",
+    "test:js": "node tests/js/upload.js",
     "lint": "phpcs",
     "format": "phpcbf --standard=phpcs-format.xml.dist",
     "format:check": "phpcs --standard=phpcs-format.xml.dist"

@@ -89,3 +89,37 @@ if ( ! class_exists( 'WP_REST_Response' ) ) {
 		}
 	}
 }
+
+if ( ! function_exists( 'get_current_user_id' ) ) {
+	function get_current_user_id() {
+		return (int) ( $GLOBALS['test_user_id'] ?? 1 );
+	}
+}
+
+/* ─── Cron ─────────────────────────────────────────────────────────── */
+
+if ( ! function_exists( 'wp_next_scheduled' ) ) {
+	function wp_next_scheduled( $hook, $args = [] ) {
+		return $GLOBALS['wp_test_cron'][ $hook ]['timestamp'] ?? false;
+	}
+}
+
+if ( ! function_exists( 'wp_schedule_event' ) ) {
+	function wp_schedule_event( $timestamp, $recurrence, $hook, $args = [], $wp_error = false ) {
+		$GLOBALS['wp_test_cron'][ $hook ] = [
+			'timestamp'  => $timestamp,
+			'recurrence' => $recurrence,
+		];
+
+		return true;
+	}
+}
+
+if ( ! function_exists( 'wp_clear_scheduled_hook' ) ) {
+	function wp_clear_scheduled_hook( $hook, $args = [], $wp_error = false ) {
+		$found = isset( $GLOBALS['wp_test_cron'][ $hook ] ) ? 1 : 0;
+		unset( $GLOBALS['wp_test_cron'][ $hook ] );
+
+		return $found;
+	}
+}

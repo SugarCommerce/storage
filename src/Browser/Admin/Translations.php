@@ -189,6 +189,13 @@ class Translations {
 				'failedPresignedUrl'  => __( 'Failed to get upload URL', 'sugarcommerce' ),
 				'uploadFailedStatus'  => __( 'Upload failed with status', 'sugarcommerce' ),
 				'uploadCancelled'     => __( 'Upload cancelled', 'sugarcommerce' ),
+				'resuming'            => __( 'Resuming: {done} of {total} parts are already in storage.', 'sugarcommerce' ),
+				'assembling'          => __( 'Putting the file together…', 'sugarcommerce' ),
+				'retrying'            => __( 'The connection dropped. Trying part {part} again…', 'sugarcommerce' ),
+				'noChecksums'         => __( 'The bucket\'s CORS rules do not allow the Content-MD5 header, so parts are being sent without a checksum.', 'sugarcommerce' ),
+				'tooLarge'            => __( '"{filename}" is larger than the 5 TB storage keeps in one file.', 'sugarcommerce' ),
+				'partFailed'          => __( 'Part {part} could not be uploaded: {reason}', 'sugarcommerce' ),
+				'resumeHint'          => __( 'Drop the same file here again to carry on where it stopped.', 'sugarcommerce' ),
 			],
 			'validation' => [
 				'validationFailed'    => __( 'File Validation Failed', 'sugarcommerce' ),

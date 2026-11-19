@@ -179,6 +179,67 @@
             }
 
             $result.html(html);
+
+            // The account answered: now do, with a tiny file, what the store
+            // will do with real ones, and show each step.
+            if (state !== 'failed' && data.check_bucket) {
+                this.runFullCheck($result, data.check_bucket);
+            }
+        },
+
+        /**
+         * Run the whole check against one bucket, and list each step.
+         */
+        runFullCheck: function ($result, bucket) {
+            const self = this;
+            const i18n = (S3BrowserGlobalConfig && S3BrowserGlobalConfig.i18n) || {};
+            const $list = $('<div class="s3-check"></div>').appendTo($result);
+
+            $list.text((i18n.checking || 'Checking "{bucket}"…').replace('{bucket}', bucket));
+
+            $.ajax({
+                url: S3BrowserGlobalConfig.restUrl + '/connection/check',
+                method: 'GET',
+                dataType: 'json',
+                data: {bucket: bucket},
+                headers: {'X-WP-Nonce': S3BrowserGlobalConfig.restNonce},
+                success: function (payload) {
+                    self.showChecks($result, $list, payload || {});
+                },
+                error: function (xhr, status, error) {
+                    const message = xhr.responseJSON && xhr.responseJSON.message ? xhr.responseJSON.message : error;
+
+                    $list.html('\u2717 ' + self.escapeHtml(message));
+                }
+            });
+        },
+
+        /**
+         * Draw the steps of the whole check.
+         */
+        showChecks: function ($result, $list, payload) {
+            const self = this;
+            const failed = payload.status === 'failed';
+            let html = '<strong>' + this.escapeHtml(payload.message || '') + '</strong>';
+
+            html += '<ul class="s3-check-list">';
+
+            (payload.checks || []).forEach(function (check) {
+                const mark = check.ok ? '\u2713' : (check.fault === 'skipped' ? '\u2013' : '\u2717');
+                const words = check.ok ? check.note : check.message;
+                const state = check.ok ? 'ok' : (check.fault === 'skipped' ? 'skipped' : 'failed');
+
+                html += '<li class="s3-check-' + state + '">' + mark + ' ' + self.escapeHtml(check.label) +
+                    (words ? '<br><span class="s3-test-details">' + self.escapeHtml(words) + '</span>' : '') + '</li>';
+            });
+
+            html += '</ul>';
+
+            $list.html(html);
+
+            if (failed) {
+                $result.removeClass('success notice').addClass('error');
+            }
         },
 
         /**

@@ -393,4 +393,22 @@ final class PolicyTest extends TestCase {
 		$this->assertCount( 1, $policy );
 		$this->assertSame( array( array( 'AllowedOrigins' => array( '*' ), 'AllowedMethods' => array( 'GET' ), 'AllowedHeaders' => array() ) ), array_map( static fn( array $rule ): array => array_intersect_key( $rule, array_flip( array( 'AllowedOrigins', 'AllowedMethods', 'AllowedHeaders' ) ) ) + array( 'AllowedHeaders' => array() ), $policy->to_array() ) );
 	}
+
+	/**
+	 * Request headers: named in any case, `*`, or a prefix ending in one --
+	 * for the method and origin asked about only.
+	 */
+	public function test_request_headers_a_rule_accepts(): void {
+		$policy = new Policy( array(
+			new Rule( array( 'https://a.example' ), array( 'PUT' ), array( 'Content-Type', 'x-amz-*' ) ),
+			new Rule( array( 'https://b.example' ), array( 'PUT' ), array( '*' ) ),
+		) );
+
+		$this->assertTrue( $policy->accepts( 'https://a.example', 'PUT', 'content-type' ) );
+		$this->assertTrue( $policy->accepts( 'https://a.example', 'PUT', 'X-Amz-Checksum-Sha256' ) );
+		$this->assertFalse( $policy->accepts( 'https://a.example', 'PUT', 'Content-MD5' ) );
+		$this->assertFalse( $policy->accepts( 'https://a.example', 'GET', 'content-type' ) );
+		$this->assertTrue( $policy->accepts( 'https://b.example', 'PUT', 'Content-MD5' ) );
+		$this->assertFalse( $policy->accepts( 'https://c.example', 'PUT', 'Content-MD5' ) );
+	}
 }

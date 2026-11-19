@@ -806,6 +806,47 @@ final readonly class Signer {
 		return $this->sign( Method::GET, $bucket, $key, $query );
 	}
 
+	/**
+	 * Sign a ListMultipartUploads call: the uploads started in a bucket and
+	 * neither finished nor aborted.
+	 *
+	 * What clearing up abandoned uploads needs, since their parts are billed
+	 * and nothing else lists them. The answer is a
+	 * `ListMultipartUploadsResult`, paged by key and then upload id: when it
+	 * is truncated, pass its `NextKeyMarker` and `NextUploadIdMarker` back.
+	 *
+	 * @since 1.0.0
+	 *
+	 * @param string $bucket           Bucket name.
+	 * @param string $prefix           Only uploads of keys starting with this.
+	 * @param string $key_marker       The previous page's NextKeyMarker, or ''.
+	 * @param string $upload_id_marker The previous page's NextUploadIdMarker, or ''.
+	 * @param int    $max_uploads      Uploads per page, clamped to S3's 1-1,000.
+	 *
+	 * @return SignedRequest
+	 */
+	public function sign_list_multipart_uploads( string $bucket, string $prefix = '', string $key_marker = '', string $upload_id_marker = '', int $max_uploads = 1000 ): SignedRequest {
+		$query = array(
+			'uploads'     => '',
+			'max-uploads' => (string) max( 1, min( 1000, $max_uploads ) ),
+		);
+
+		if ( '' !== $prefix ) {
+			$query['prefix'] = $prefix;
+		}
+
+		if ( '' !== $key_marker ) {
+			$query['key-marker'] = $key_marker;
+
+			// Meaningless without a key marker, and S3 refuses it alone.
+			if ( '' !== $upload_id_marker ) {
+				$query['upload-id-marker'] = $upload_id_marker;
+			}
+		}
+
+		return $this->sign( Method::GET, $bucket, '', $query );
+	}
+
 	/* ─── Helpers ───────────────────────────────────────────────────── */
 
 	/**

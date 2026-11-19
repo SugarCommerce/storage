@@ -52,7 +52,7 @@ final class Rules {
 		'presigned_upload' => array(
 			'ID'             => 'PresignedUpload',
 			'AllowedMethods' => array( 'PUT' ),
-			'AllowedHeaders' => array( 'Content-Type', 'Content-Length' ),
+			'AllowedHeaders' => array( 'Content-Type', 'Content-Length', 'Content-MD5' ),
 			'ExposeHeaders'  => array( 'ETag' ),
 			'MaxAgeSeconds'  => 600,
 		),

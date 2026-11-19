@@ -204,6 +204,32 @@ final readonly class Rule {
 	}
 
 	/**
+	 * Does this rule let the browser send a request header?
+	 *
+	 * AllowedHeaders may hold `*`, or a name ending in one (`x-amz-*`), and
+	 * names match in any case -- as a browser's preflight is answered.
+	 *
+	 * @since 1.0.0
+	 *
+	 * @param string $header Request header name, any case.
+	 *
+	 * @return bool
+	 */
+	public function accepts( string $header ): bool {
+		$header = strtolower( $header );
+
+		foreach ( $this->headers as $allowed ) {
+			$allowed = strtolower( $allowed );
+
+			if ( $allowed === $header || ( str_ends_with( $allowed, '*' ) && str_starts_with( $header, substr( $allowed, 0, -1 ) ) ) ) {
+				return true;
+			}
+		}
+
+		return false;
+	}
+
+	/**
 	 * Does this rule let the browser read a response header?
 	 *
 	 * Unlike allowed headers, there is no wildcard here that every provider
