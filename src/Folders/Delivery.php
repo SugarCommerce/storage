@@ -13,7 +13,7 @@ declare( strict_types=1 );
 namespace SugarCommerce\Storage\Folders;
 
 use SugarCommerce\Storage\Files\Mime;
-use SugarCommerce\Storage\S3\ContentDisposition;
+use SugarCommerce\Storage\Files\ContentDisposition;
 use SugarCommerce\Storage\Utils\Runtime;
 
 /**

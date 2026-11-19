@@ -1,9 +1,9 @@
 {
   "name": "sugarcommerce/storage",
-  "description": "Files and object storage for WordPress: S3-compatible signing, uploads and listings, an admin bucket browser, protected upload folders with local delivery, safe paths, MIME types and filenames, streamed zips, upload inspection, and the cache, cleanup and cast helpers.",
+  "description": "Files on disk for WordPress: protected upload folders with local delivery, safe paths, MIME types, filenames and download names, streamed zips, and upload inspection.",
   "type": "library",
   "license": "GPL-2.0-or-later",
-  "homepage": "https://github.com/sugarcommerce/storage",
+  "homepage": "https://github.com/SugarCommerce/storage",
   "authors": [
     {
       "name": "David Sherlock",
@@ -39,24 +39,20 @@
   "minimum-stability": "dev",
   "prefer-stable": true,
   "support": {
-    "issues": "https://github.com/sugarcommerce/storage/issues",
-    "source": "https://github.com/sugarcommerce/storage"
+    "issues": "https://github.com/SugarCommerce/storage/issues",
+    "source": "https://github.com/SugarCommerce/storage"
   },
   "keywords": [
     "wordpress",
-    "s3",
-    "sigv4",
-    "presigned-url",
-    "cloudflare-r2",
-    "object-storage",
-    "multipart-upload",
-    "media-browser",
     "downloads",
     "file-delivery",
+    "x-sendfile",
     "htaccess",
     "mime-types",
+    "filenames",
+    "content-disposition",
     "zip",
-    "transients"
+    "upload-inspection"
   ],
   "require-dev": {
     "phpcompatibility/phpcompatibility-wp": "^2.1",
@@ -74,7 +70,6 @@
   },
   "scripts": {
     "test": "phpunit",
-    "test:js": "node tests/js/upload.js",
     "lint": "phpcs",
     "format": "phpcbf --standard=phpcs-format.xml.dist",
     "format:check": "phpcs --standard=phpcs-format.xml.dist"

@@ -15,12 +15,12 @@
 
 declare( strict_types=1 );
 
-namespace SugarCommerce\Storage\Tests\S3;
+namespace SugarCommerce\Storage\Tests\Files;
 
 use PHPUnit\Framework\Attributes\DataProvider;
 use PHPUnit\Framework\Attributes\RequiresPhpExtension;
 use PHPUnit\Framework\TestCase;
-use SugarCommerce\Storage\S3\ContentDisposition;
+use SugarCommerce\Storage\Files\ContentDisposition;
 
 final class ContentDispositionTest extends TestCase {
 

@@ -10,9 +10,8 @@
 
 declare( strict_types=1 );
 
-namespace SugarCommerce\Storage\S3;
+namespace SugarCommerce\Storage\Files;
 
-use SugarCommerce\Storage\Files\Filename;
 
 /**
  * Class ContentDisposition
