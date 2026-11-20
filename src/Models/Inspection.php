@@ -10,7 +10,7 @@
 
 declare( strict_types=1 );
 
-namespace SugarCommerce\Storage\Files;
+namespace SugarCommerce\Storage\Models;
 
 /**
  * What an inspection found.

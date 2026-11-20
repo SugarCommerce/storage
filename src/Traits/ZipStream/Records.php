@@ -12,7 +12,7 @@ declare( strict_types=1 );
 
 namespace SugarCommerce\Storage\Traits\ZipStream;
 
-use SugarCommerce\Storage\Files\ZipEntry;
+use SugarCommerce\Storage\Models\ZipEntry;
 
 /**
  * Trait Records

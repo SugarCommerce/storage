@@ -340,6 +340,7 @@ the family is never taken for an unprefixed copy.
 ## How it is laid out
 
 * `Files/` -- paths, MIME types, filenames, download names, upload inspection and streamed zips
+* `Models/` -- what an inspection found (`Inspection`) and a zip member written (`ZipEntry`)
 * `Folders/` -- protected upload folders: registering, guard files and server rules, and delivery
 * `Traits/` -- `ZipStream`'s format records, kept apart from deciding what goes in the archive
 * `Utils/` -- the build's prefix, for hook names

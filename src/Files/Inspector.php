@@ -12,6 +12,8 @@ declare( strict_types=1 );
 
 namespace SugarCommerce\Storage\Files;
 
+use SugarCommerce\Storage\Models\Inspection;
+
 /**
  * Looking at what was actually uploaded.
  *
