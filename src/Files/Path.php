@@ -134,7 +134,9 @@ final class Path {
 	/**
 	 * A local URL's path on disk.
 	 *
-	 * Uploads first, because that is where nearly everything is. Each branch
+	 * Uploads first, because that is where nearly everything is. The file
+	 * has to be inside the folder its address names, resolved, so `..` in
+	 * the address cannot climb out of it. Each branch
 	 * confirms the file is actually there — a URL that maps to nothing is not
 	 * a path, and handing one back means the caller finds out two functions
 	 * later.
@@ -169,9 +171,13 @@ final class Path {
 			// cache buster used to map to a filename with `?ver=2` on the end
 			// of it, which exists nowhere.
 			$relative = (string) strtok( substr( $url, strlen( $prefix ) ), '?#' );
-			$path     = self::normalize( $directory . '/' . ltrim( $relative, '/' ) );
 
-			return file_exists( $path ) ? $path : null;
+			// Inside the folder the address names, as within() decides: an
+			// uploads URL ending `../../wp-config.php` used to come back as
+			// the path of wp-config.php.
+			$relative = ltrim( $relative, '/' );
+
+			return '' === $relative ? null : self::within( $directory, $relative );
 		}
 
 		return null;

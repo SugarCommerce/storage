@@ -242,4 +242,33 @@ final class PathTest extends TestCase {
 		$this->assertNull( Path::to_url( '/somewhere/else/a.css' ) );
 		$this->assertNull( Path::to_url( '' ) );
 	}
+
+	/**
+	 * A URL is mapped to a file inside the folder its address names, and
+	 * `..` in the address does not walk out of it: an uploads URL ending
+	 * `../../secret.txt` is not the secret beside the uploads folder.
+	 */
+	public function test_a_url_does_not_climb_out_of_its_folder(): void {
+		wp_test_reset();
+
+		$uploads = $GLOBALS['wp_test_uploads'];
+		$outside = dirname( $uploads ) . '/secret-' . bin2hex( random_bytes( 3 ) ) . '.txt';
+
+		if ( ! is_dir( $uploads . '/2026' ) ) {
+			mkdir( $uploads . '/2026', 0o777, true );
+		}
+
+		file_put_contents( $uploads . '/2026/song.mp3', 'mp3' );
+		file_put_contents( $outside, 'secret' );
+
+		try {
+			$this->assertSame( realpath( $uploads . '/2026/song.mp3' ), Path::from_url( 'https://example.test/wp-content/uploads/2026/song.mp3?ver=2' ) );
+			$this->assertNull( Path::from_url( 'https://example.test/wp-content/uploads/2026/../../' . basename( $outside ) ) );
+			$this->assertNull( Path::from_url( 'https://example.test/wp-content/uploads/../' . basename( $outside ) ) );
+			$this->assertNull( Path::from_url( 'https://example.test/wp-content/uploads/2026/song.mp3%00.txt' ) );
+		} finally {
+			unlink( $uploads . '/2026/song.mp3' );
+			unlink( $outside );
+		}
+	}
 }
