@@ -326,7 +326,8 @@ gives the name: `sugarcommerce_storage_name` unprefixed, and
 A prefix that itself starts `SugarCommerce\` keeps all its segments --
 `SugarCommerce\Playground\Vendor\` gives
 `sugarcommerce_playground_vendor_sugarcommerce_storage_name` -- so a plugin of
-the family is never taken for an unprefixed copy.
+the family is never taken for an unprefixed copy. `Utils\Runtime` is
+sugarcommerce/plugin's `Runtime`, the family's one copy of that rule.
 
 | Hook | Kind | What it does |
 |---|---|---|
@@ -359,7 +360,7 @@ the family is never taken for an unprefixed copy.
 
 * PHP 8.3 or later
 * WordPress 7.1 or later
-* `sugarcommerce/plugin`
+* `sugarcommerce/plugin` (its `Runtime` names the hooks, `Assets` serves the files)
 
 ## License
 
