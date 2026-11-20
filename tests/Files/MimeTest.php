@@ -124,7 +124,28 @@ final class MimeTest extends TestCase {
 	 * @return array<string, array{0: string}>
 	 */
 	public static function dangerousProvider(): array {
-		$types = [ 'text/html', 'application/xhtml+xml', 'text/javascript', 'application/javascript', 'application/x-httpd-php', 'image/svg+xml' ];
+		$types = [
+			'text/html',
+			'application/xhtml+xml',
+			'text/javascript',
+			'application/javascript',
+			'application/x-httpd-php',
+			'image/svg+xml',
+			// With parameters, or spelled oddly, still the same type.
+			'image/svg+xml; charset=utf-8',
+			'text/html;charset=UTF-8',
+			' Image/SVG+XML ',
+			// XML a browser renders as a document, scripts and all.
+			'text/xml',
+			'application/xml',
+			'application/xslt+xml',
+			'application/rdf+xml',
+			'text/xsl',
+			'text/ecmascript',
+			'application/ecmascript',
+			'text/vbscript',
+			'multipart/x-mixed-replace',
+		];
 
 		return array_combine( $types, array_map( static fn( string $type ): array => [ $type ], $types ) );
 	}

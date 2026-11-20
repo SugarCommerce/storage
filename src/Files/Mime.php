@@ -125,6 +125,11 @@ final class Mime {
 		'application/x-javascript',
 		'application/x-httpd-php',
 		'image/svg+xml',
+		'text/xsl',
+		'text/ecmascript',
+		'application/ecmascript',
+		'text/vbscript',
+		'multipart/x-mixed-replace',
 	];
 
 	/**
@@ -248,9 +253,9 @@ final class Mime {
 	 * @return bool
 	 */
 	public static function must_download( string $type ): bool {
-		$type = strtolower( trim( $type ) );
+		$type = self::essence( $type );
 
-		if ( in_array( $type, self::NEVER_INLINE, true ) ) {
+		if ( self::is_dangerous_inline( $type ) ) {
 			return true;
 		}
 
@@ -275,7 +280,25 @@ final class Mime {
 	 * @return bool
 	 */
 	public static function is_dangerous_inline( string $type ): bool {
-		return in_array( strtolower( trim( $type ) ), self::NEVER_INLINE, true );
+		$type = self::essence( $type );
+
+		// Any XML a browser renders as a document can carry script in the
+		// XHTML namespace, whatever its own name says.
+		return in_array( $type, self::NEVER_INLINE, true )
+			|| str_ends_with( $type, '+xml' )
+			|| str_ends_with( $type, '/xml' );
+	}
+
+	/**
+	 * A type without its parameters, trimmed and lower-cased: what a
+	 * browser decides by. `image/svg+xml; charset=utf-8` is an SVG.
+	 *
+	 * @param string $type The MIME type, as given.
+	 *
+	 * @return string
+	 */
+	private static function essence( string $type ): string {
+		return strtolower( trim( explode( ';', $type, 2 )[0] ) );
 	}
 
 	/**
