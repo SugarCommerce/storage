@@ -337,89 +337,22 @@ the family is never taken for an unprefixed copy.
 | `allowed_mime_types` | filter | The types `Mime::allowed_types()` starts from, with the context |
 | `allowed_mime_types_{context}` | filter | The same, for one context only |
 
-## Moving from arraypress/wp-*
+## How it is laid out
 
-Two libraries and two retired SaaS packages became this one, under
-`SugarCommerce\Storage\`, with the text domain `sugarcommerce`. Anything not
-listed keeps its name.
+* `Files/` -- paths, MIME types, filenames, download names, upload inspection and streamed zips
+* `Folders/` -- protected upload folders: registering, guard files and server rules, and delivery
+* `Traits/` -- `ZipStream`'s format records, kept apart from deciding what goes in the archive
+* `Utils/` -- the build's prefix, for hook names
 
-### Moved out of `sugarcommerce/storage`
+## Security
 
-The package was split: files on disk stayed, object storage and the admin
-browser went to packages of their own, and the stored-value helpers joined
-the other small helpers.
-
-| Was | Now |
-|---|---|
-| `SugarCommerce\Storage\S3\*` (signer, providers, accounts, `Address`, `Bucket`, `Multipart`, `Upload`, `Connection`, `Probe`, CORS) | `SugarCommerce\S3\*` in `sugarcommerce/s3` -- same classes and methods |
-| `SugarCommerce\Storage\S3\ContentDisposition` | `SugarCommerce\Storage\Files\ContentDisposition` (here) |
-| `SugarCommerce\Storage\Browser\*` (the bucket browser, its client, REST routes, tables, WP-CLI) | `SugarCommerce\StorageBrowser\*` in `sugarcommerce/storage-browser` |
-| `SugarCommerce\Storage\Cache`, `Cast`, `Cleanup` | `SugarCommerce\Support\Cache`, `Cast`, `Cleanup` in `sugarcommerce/support` -- same behaviour |
-| the browser's scripts, styles and icons in `assets/` | `sugarcommerce/storage-browser`'s `assets/` (scripts now built from `src/js`) |
-| hooks `sugarcommerce_storage_browser_*`, `sugarcommerce_storage_s3_*` | `sugarcommerce_storage_browser_browser_*`, `sugarcommerce_storage_browser_s3_*`: the browser's package names its own (see its README) |
-| option `sugarcommerce_storage_upload_{id}` | `sugarcommerce_s3_upload_{id}` |
-
-The hooks that stay here keep their names: `redirect_to`, `htaccess`,
-`nginx_internal_location`, `nginx_xsendfile` and `allowed_mime_types`, all
-`sugarcommerce_storage_{name}` unprefixed.
-
-### From `arraypress/wp-file-utils` (`ArrayPress\FileUtils`)
-
-| Old | New |
-|---|---|
-| `Path::within( $directory, $candidate )` | `Files\Path::within( $directory, $candidate )` |
-| `Path::is_absolute()`, `normalize()`, `from_url()`, `is_local()` | `Files\Path::` the same |
-| `Path::to_url()` | `Files\Path::to_url()` -- uploads from `wp_upload_dir()`, everything else through `SugarCommerce\Plugin\Assets::path_to_url()`: the WordPress root maps to `site_url()` rather than `home_url()`, a symlinked plugin maps back, and a folder that merely starts with the uploads folder's name is no longer taken for it |
-| `MIME::of()`, `extension_for()`, `must_download()`, `is_dangerous_inline()`, `is_media()`, `all()`, `extras()` | `Files\Mime::` the same (the class is `Mime`) |
-| `Filename::with_extension()` | `Files\Filename::with_extension()` |
-| `Filename::rename( $name, $original, $lower )` | `Files\Filename::rename()` — direction overrides are now removed too |
-| `Filename::extension( $name )` | `Files\Filename::extension()` — letters and digits only, at most ten; a `#` in a plain filename is kept |
-
-### From `arraypress/wp-protected-folders` (`ArrayPress\ProtectedFolders`)
-
-| Old | New |
-|---|---|
-| `register_protected_folder( $id, $config )` | `Folders\Folders::register( $id, $config )` |
-| `get_protected_folder( $id )` | `Folders\Folders::get( $id )` |
-| `deliver_protected_file( $folder, $relative, $options )` | `Folders\Folders::deliver( $folder, $relative, $options )` |
-| `deliver_file_at_path( $path, $options )` | `Folders\Delivery::send( $path, $options )` |
-| `is_folder_protected( $id, $force )` | `Folders\Folders::is_protected( $id, $force )` |
-| `get_protected_folder_server_rules( $id )` | `Folders\Folders::server_rules( $id )` |
-| `Folder`, `Folders`, `Guard`, `Rules`, `Delivery` | `SugarCommerce\Storage\Folders\*`, same methods |
-| `ArrayPress\ServerUtils\Server::has_xsendfile()` (soft dependency) | `Folders\Delivery::server_sends_files()` |
-| filter `protected_folders_redirect_to` | `Runtime::hook( 'redirect_to' )` |
-| filter `protected_folders_htaccess` | `Runtime::hook( 'htaccess' )` |
-| filter `protected_folders_nginx_internal_location` | `Runtime::hook( 'nginx_internal_location' )` |
-| filter `server_nginx_xsendfile` | `Runtime::hook( 'nginx_xsendfile' )` |
-| transient `protected_folders_protected_{id}` | `sugarcommerce_storage_protected_{id}` (asked again once) |
-| `Rules::MARKER` (`# Protected Folders`) | unchanged, so `.htaccess` files the old library wrote are recognised and kept current |
-
-### From `arraypress/wp-s3-signer`
-
-| Old | New |
-|---|---|
-| `Support\Filename::basename()`, `extension()`, `stem()`, `clamp()`, `to_ascii()` | `Files\Filename::…` |
-| `Support\ContentDisposition::attachment()`, `sanitize()`, `ascii_fallback()` | `Files\ContentDisposition::…` |
-
-Everything else from it is `sugarcommerce/s3`.
-
-### From the retired SaaS packages
-
-| Old | New |
-|---|---|
-| `SugarCommerce\ZipStream\Archive` | `SugarCommerce\Storage\Files\ZipStream` (plus `add_file( $path, $name, $time )`) |
-| `SugarCommerce\ZipStream\Entry` | `SugarCommerce\Storage\Files\ZipEntry` |
-| `SugarCommerce\FileInspect\Inspector` | `SugarCommerce\Storage\Files\Inspector` -- reasons translated |
-| `SugarCommerce\FileInspect\Verdict` | `SugarCommerce\Storage\Files\Inspection` |
-| `SugarCommerce\FileInspect\ZipDirectory` | `SugarCommerce\Storage\Files\ZipDirectory` |
-| `SugarCommerce\FileInspect\Filename::refusal()` / `EXECUTABLE` | `Files\Filename::refusal()` / `Filename::EXECUTABLE` |
-| `SugarCommerce\FileInspect\Filename::rename( $current, $typed, $max )` | `Files\Filename::relabel( $current, $typed, $max )` |
-| `SugarCommerce\VirusScan\*`, `SugarCommerce\ImageVariants\*` | removed: unused. `Files\Inspector` still checks what an upload is; `wp_get_image_editor()` resizes |
-
-Left out: the zip-stream README's `$http->stream()` push example. It relied on
-http-client's connection pinning, which WordPress's HTTP API has no
-equivalent of. The WordPress way is above -- `stream` to a temporary file,
-then `add_file()`.
+* Resolves a path, `..` and symlinks included, before saying it is inside a folder, and refuses null bytes and stream wrappers such as `phar://`
+* Maps a local URL to a file only inside the folder its address names, so `../../wp-config.php` on the end of an uploads URL is nothing
+* Never shows inline a type a browser would run (HTML, SVG, JavaScript and the rest), and sends `nosniff` so the bytes cannot argue otherwise
+* Names a download in both RFC 6266 forms with control characters, direction overrides and path separators gone, so a name cannot spoof its extension or break the header
+* Writes zip entry names that cannot escape the archive when extracted -- no `..`, backslashes, drive letters or Windows dot-segments
+* Answers a range it cannot satisfy with 416, rather than with the whole file
+* Refuses an upload whose bytes are an executable, a disguised type, or a zip with one inside, whatever its extension says
 
 ## Requirements
 
