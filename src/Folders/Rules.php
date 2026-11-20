@@ -31,7 +31,7 @@ final class Rules {
 	 * How a file this library wrote is told from one somebody else did, so
 	 * a hand-written .htaccess is left alone rather than overwritten.
 	 */
-	public const MARKER = '# Protected Folders';
+	public const string MARKER = '# Protected Folders';
 
 	/**
 	 * Extensions, reduced to what can safely go in a pattern.

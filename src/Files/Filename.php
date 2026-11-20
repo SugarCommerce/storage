@@ -30,7 +30,7 @@ final class Filename {
 	 * Long enough for the real ones and short enough that a "file.zzzzz…"
 	 * cannot eat a whole budget.
 	 */
-	private const MAX_EXTENSION = 10;
+	private const int MAX_EXTENSION = 10;
 
 	/**
 	 * Extensions that run on a double-click, or render as a page.
@@ -42,7 +42,7 @@ final class Filename {
 	 *
 	 * @var string[]
 	 */
-	public const EXECUTABLE = [
+	public const array EXECUTABLE = [
 		'exe',
 		'scr',
 		'bat',
@@ -107,19 +107,19 @@ final class Filename {
 	 *
 	 * `Invoice\u{202E}fdp.exe` displays as `Invoiceexe.pdf`.
 	 */
-	private const INVISIBLE = '[\x{061C}\x{180E}\x{200B}-\x{200F}\x{202A}-\x{202E}\x{2060}-\x{2069}\x{FEFF}]';
+	private const string INVISIBLE = '[\x{061C}\x{180E}\x{200B}-\x{200F}\x{202A}-\x{202E}\x{2060}-\x{2069}\x{FEFF}]';
 
 	/**
 	 * The part of INVISIBLE that reorders what follows it -- embeddings,
 	 * overrides and isolates. A filename has no honest use for one.
 	 */
-	private const REORDERING = '[\x{202A}-\x{202E}\x{2066}-\x{2069}]';
+	private const string REORDERING = '[\x{202A}-\x{202E}\x{2066}-\x{2069}]';
 
 	/**
 	 * Names Windows reserves for devices, with or without an extension. A
 	 * file called `CON.wav` cannot be saved there at all.
 	 */
-	private const RESERVED = '/^(CON|PRN|AUX|NUL|COM[0-9¹²³]|LPT[0-9¹²³])(?=\.|$)/iu';
+	private const string RESERVED = '/^(CON|PRN|AUX|NUL|COM[0-9¹²³]|LPT[0-9¹²³])(?=\.|$)/iu';
 
 	/**
 	 * The last segment of a path, whichever separator was used.

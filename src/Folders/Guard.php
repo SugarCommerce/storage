@@ -35,7 +35,7 @@ final class Guard {
 	 *
 	 * @var array<string, string>
 	 */
-	private const INDEXES = [
+	private const array INDEXES = [
 		'index.php'  => "<?php\n// Silence is golden.\n",
 		'index.html' => '',
 	];

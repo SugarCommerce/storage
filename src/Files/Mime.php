@@ -42,7 +42,7 @@ final class Mime {
 	 *
 	 * @var array<string, string>
 	 */
-	private const EXTRA = [
+	private const array EXTRA = [
 		// Vector and design.
 		'svg'    => 'image/svg+xml',
 		'ai'     => 'application/illustrator',
@@ -117,7 +117,7 @@ final class Mime {
 	 *
 	 * @var string[]
 	 */
-	private const NEVER_INLINE = [
+	private const array NEVER_INLINE = [
 		'text/html',
 		'application/xhtml+xml',
 		'text/javascript',
@@ -132,7 +132,7 @@ final class Mime {
 	 *
 	 * @var string[]
 	 */
-	private const INLINE = [
+	private const array INLINE = [
 		'application/pdf',
 		'text/plain',
 	];
@@ -142,7 +142,7 @@ final class Mime {
 	 *
 	 * @var string[]
 	 */
-	private const DOCUMENTS = [
+	private const array DOCUMENTS = [
 		'application/pdf',
 		'application/msword',
 		'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
@@ -165,7 +165,7 @@ final class Mime {
 	 *
 	 * @var string[]
 	 */
-	private const ARCHIVES = [
+	private const array ARCHIVES = [
 		'application/zip',
 		'application/x-zip-compressed',
 		'application/rar',

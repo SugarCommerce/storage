@@ -53,7 +53,7 @@ final readonly class ContentDisposition {
 	/**
 	 * Name used when nothing usable survives sanitisation.
 	 */
-	private const FALLBACK = 'download';
+	private const string FALLBACK = 'download';
 
 	/**
 	 * Maximum filename length in bytes.
@@ -62,7 +62,7 @@ final readonly class ContentDisposition {
 	 * meaningfully under that leaves room for a browser's " (1)"
 	 * de-duplication suffix.
 	 */
-	private const MAX_BYTES = 200;
+	private const int MAX_BYTES = 200;
 
 	/**
 	 * Control characters: C0, and DEL.
@@ -70,7 +70,7 @@ final readonly class ContentDisposition {
 	 * A filename carrying one of these is either corrupt or is trying to
 	 * terminate a header early.
 	 */
-	private const CONTROL = '/[\x00-\x1F\x7F]/u';
+	private const string CONTROL = '/[\x00-\x1F\x7F]/u';
 
 	/**
 	 * Characters that are in the name but not on the screen.
@@ -79,17 +79,17 @@ final readonly class ContentDisposition {
 	 * order mark. These are the ingredients of a display-spoofing filename:
 	 * `report\u{202E}fdp.exe` shows as `reportexe.pdf` and is not one.
 	 */
-	private const INVISIBLE = '/[\x{200B}-\x{200F}\x{202A}-\x{202E}\x{2066}-\x{2069}\x{FEFF}]/u';
+	private const string INVISIBLE = '/[\x{200B}-\x{200F}\x{202A}-\x{202E}\x{2066}-\x{2069}\x{FEFF}]/u';
 
 	/**
 	 * Whitespace, including the non-breaking space that `\s` misses.
 	 */
-	private const WHITESPACE = '/[\s\x{00A0}]+/u';
+	private const string WHITESPACE = '/[\s\x{00A0}]+/u';
 
 	/**
 	 * What a header's quoted-string form cannot carry unescaped.
 	 */
-	private const UNQUOTABLE = array( '"', '\\' );
+	private const array UNQUOTABLE = array( '"', '\\' );
 
 	/**
 	 * Build a complete `Content-Disposition: attachment` value.

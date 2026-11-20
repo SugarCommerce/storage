@@ -48,7 +48,7 @@ final class Delivery {
 	 * writing 512KB instead of 1MB into the same buffer changes nothing
 	 * anybody can measure.
 	 */
-	private const CHUNK = 1048576;
+	private const int CHUNK = 1048576;
 
 	/**
 	 * Send a file.
