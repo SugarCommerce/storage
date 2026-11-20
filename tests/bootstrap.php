@@ -296,6 +296,26 @@ if ( ! function_exists( 'sanitize_text_field' ) ) {
 	}
 }
 
+if ( ! function_exists( 'wp_strip_all_tags' ) ) {
+	/**
+	 * Core's: script and style with their contents, then every tag.
+	 */
+	function wp_strip_all_tags( $text, $remove_breaks = false ) {
+		$text = (string) preg_replace( '@<(script|style)[^>]*?>.*?</\\1>@si', '', (string) $text );
+
+		return trim( strip_tags( $text ) );
+	}
+}
+
+if ( ! function_exists( 'wp_check_invalid_utf8' ) ) {
+	/**
+	 * Core's, for a UTF-8 site: '' for text that is not valid UTF-8.
+	 */
+	function wp_check_invalid_utf8( $text, $strip = false ) {
+		return mb_check_encoding( (string) $text, 'UTF-8' ) ? (string) $text : '';
+	}
+}
+
 if ( ! function_exists( 'sanitize_title' ) ) {
 	function sanitize_title( $title ) {
 		return trim( (string) preg_replace( '/[^a-z0-9]+/', '-', strtolower( (string) $title ) ), '-' );

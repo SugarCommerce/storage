@@ -97,6 +97,36 @@ final class Path {
 	}
 
 	/**
+	 * Where a file is, as a column keeps it: a path, a URL, a key in a
+	 * bucket.
+	 *
+	 * Text that is not valid UTF-8 is '' (`wp_check_invalid_utf8()`), tags
+	 * go (`wp_strip_all_tags()`), control characters go, and the value is
+	 * trimmed and cut to `$max_length` characters, never inside one.
+	 * Nothing else changes: not `sanitize_text_field()`, which takes `%20`
+	 * out of a URL and folds the spaces in a file name. Which schemes a file
+	 * may be delivered from is for whoever delivers it.
+	 *
+	 *     Path::clean( 's3://bucket/My%20Kit (v2).zip', 1000 ); // as it was
+	 *     Path::clean( " packs/<b>kit</b>.zip\x00 " );          // 'packs/kit.zip'
+	 *
+	 * @param mixed $value      The value. Anything not scalar is ''.
+	 * @param int   $max_length Most characters to keep. 0 for no limit.
+	 *
+	 * @return string
+	 */
+	public static function clean( mixed $value, int $max_length = 0 ): string {
+		if ( ! is_scalar( $value ) ) {
+			return '';
+		}
+
+		$path = wp_strip_all_tags( wp_check_invalid_utf8( (string) $value ) );
+		$path = trim( (string) preg_replace( '/[\x00-\x1F\x7F]/', '', $path ) );
+
+		return $max_length > 0 ? mb_substr( $path, 0, $max_length ) : $path;
+	}
+
+	/**
 	 * Whether a path names a place rather than a way to get there.
 	 *
 	 * @param string $path The path.

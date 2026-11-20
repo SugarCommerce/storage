@@ -135,6 +135,8 @@ use SugarCommerce\Storage\Files\Mime;
 use SugarCommerce\Storage\Files\Path;
 
 $file = Path::within( $downloads_dir, $requested ); // the resolved path, or null
+$kept = Path::clean( $typed, 1000 );                // a path, URL or bucket key as a column keeps it: tags,
+                                                    // control characters and bad UTF-8 out, %20 and spaces kept
 
 if ( null === $file ) {
 	wp_die( 'Not found', 404 );
